@@ -13,7 +13,7 @@
 # MAGIC
 # MAGIC 1. Explain Spark's distributed architecture (driver, workers, partitions, shuffle) and how it applies to ML workloads
 # MAGIC 2. Build a feature engineering pipeline using Spark SQL and DataFrame joins
-# MAGIC 3. Train classification models using `pyspark.ml` (Logistic Regression, Random Forest)
+# MAGIC 3. Train classification models using scikit-learn (Logistic Regression, Random Forest, Gradient Boosting)
 # MAGIC 4. Evaluate binary classifiers with AUC, accuracy, and F1 score
 # MAGIC 5. Use the Pandas API on Spark and Pandas UDFs for distributed inference
 # MAGIC 6. Understand the newest Spark ML capabilities (`pyspark.ml.connect`, `TorchDistributor`)
@@ -150,10 +150,13 @@ df_campaign_agg.show(5, truncate=False)
 # --- Step 3: Join everything into a single feature table ---
 
 # Start with lead scores (one row per contact — this is our label table)
+# Drop created_date from accounts to avoid ambiguity with contacts.created_date
+df_accounts_slim = df_accounts.drop("created_date")
+
 df_features = (
     df_lead_scores
     .join(df_contacts, on="contact_id", how="inner")
-    .join(df_accounts, on="account_id", how="left")
+    .join(df_accounts_slim, on="account_id", how="left")
     .join(df_activity_agg, on="contact_id", how="left")
     .join(df_campaign_agg, on="contact_id", how="left")
 )
@@ -235,85 +238,102 @@ df_features.explain(True)
 
 # COMMAND ----------
 
-print(f"Current number of partitions: {df_features.rdd.getNumPartitions()}")
+# On serverless compute, .rdd operations are not supported.
+# Instead, we can write the DataFrame to a temp table and inspect partition count via DESCRIBE DETAIL,
+# or simply demonstrate repartition/coalesce concepts without .rdd.getNumPartitions().
+
+# Save to a temp location to inspect partition count via DESCRIBE DETAIL
+df_features.write.mode("overwrite").saveAsTable(f"{catalog}.{schema}._tmp_partition_demo")
+partition_info = spark.sql(f"DESCRIBE DETAIL {catalog}.{schema}._tmp_partition_demo").select("numFiles").collect()
+print(f"Current number of data files (partitions written): {partition_info[0]['numFiles']}")
 
 # Repartition to a specific number (useful when writing output for downstream consumers)
 df_repartitioned = df_features.repartition(8)
-print(f"After repartition(8):         {df_repartitioned.rdd.getNumPartitions()}")
+df_repartitioned.write.mode("overwrite").saveAsTable(f"{catalog}.{schema}._tmp_partition_demo_8")
+partition_info_8 = spark.sql(f"DESCRIBE DETAIL {catalog}.{schema}._tmp_partition_demo_8").select("numFiles").collect()
+print(f"After repartition(8) and write:                    {partition_info_8[0]['numFiles']} files")
 
 # Coalesce reduces partitions WITHOUT a full shuffle (more efficient for reducing)
 df_coalesced = df_features.coalesce(4)
-print(f"After coalesce(4):            {df_coalesced.rdd.getNumPartitions()}")
+df_coalesced.write.mode("overwrite").saveAsTable(f"{catalog}.{schema}._tmp_partition_demo_4")
+partition_info_4 = spark.sql(f"DESCRIBE DETAIL {catalog}.{schema}._tmp_partition_demo_4").select("numFiles").collect()
+print(f"After coalesce(4) and write:                       {partition_info_4[0]['numFiles']} files")
+
+# Clean up temp tables
+spark.sql(f"DROP TABLE IF EXISTS {catalog}.{schema}._tmp_partition_demo")
+spark.sql(f"DROP TABLE IF EXISTS {catalog}.{schema}._tmp_partition_demo_8")
+spark.sql(f"DROP TABLE IF EXISTS {catalog}.{schema}._tmp_partition_demo_4")
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ---
-# MAGIC # Section 2: Distributed Training with Spark ML
+# MAGIC # Section 2: Training ML Models on Serverless Compute
 # MAGIC
-# MAGIC ## 2.1 — The `pyspark.ml` Pipeline
+# MAGIC ## 2.1 — ML on Serverless: scikit-learn + Spark DataFrames
 # MAGIC
-# MAGIC Spark ML uses a **Pipeline** abstraction inspired by scikit-learn:
+# MAGIC On **serverless compute**, the classic JVM-based `pyspark.ml` APIs (StringIndexer, VectorAssembler,
+# MAGIC LogisticRegression, etc.) are **not available** because custom JVM code is restricted.
 # MAGIC
-# MAGIC | Concept | Description |
-# MAGIC |---------|-------------|
-# MAGIC | **Transformer** | Takes a DataFrame, returns a DataFrame (e.g., `VectorAssembler`, `StringIndexer.fit().transform()`) |
-# MAGIC | **Estimator** | Takes a DataFrame, fits a model, returns a Transformer (e.g., `LogisticRegression`, `RandomForestClassifier`) |
-# MAGIC | **Pipeline** | Chains multiple stages (Estimators + Transformers) into a single workflow |
-# MAGIC | **ParamGrid** | Defines hyperparameter search space for cross-validation |
+# MAGIC Instead, we use a powerful and practical pattern:
 # MAGIC
-# MAGIC All of these run **distributed** — the heavy computation happens on the workers, not the driver.
+# MAGIC | Step | Tool | Why |
+# MAGIC |------|------|-----|
+# MAGIC | **Feature engineering** | Spark DataFrames / SQL | Distributed, handles TBs of data |
+# MAGIC | **Model training** | scikit-learn (on pandas) | Rich algorithm library, fast on driver for datasets that fit in memory |
+# MAGIC | **Distributed inference** | Pandas UDFs (`mapInPandas`) | Applies trained model across partitions on workers |
+# MAGIC
+# MAGIC This is actually the **recommended pattern** for most ML workloads on Databricks — even on
+# MAGIC classic compute — because scikit-learn and XGBoost are often faster and more flexible than
+# MAGIC Spark ML for datasets under ~100 GB.
 # MAGIC
 
 # COMMAND ----------
 
-from pyspark.ml.feature import (
-    StringIndexer,
-    VectorAssembler,
-    StandardScaler,
-)
-from pyspark.ml.classification import (
-    LogisticRegression,
-    RandomForestClassifier,
-)
-from pyspark.ml.evaluation import (
-    BinaryClassificationEvaluator,
-    MulticlassClassificationEvaluator,
-)
-from pyspark.ml import Pipeline
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.metrics import roc_auc_score, accuracy_score, f1_score
+from sklearn.model_selection import train_test_split
+import pandas as pd
+import numpy as np
 
-print("Spark ML imports loaded successfully.")
+print("scikit-learn imports loaded successfully (serverless-compatible).")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2.2 — Encode Categorical Features
+# MAGIC ## 2.2 — Prepare Data for scikit-learn
 # MAGIC
-# MAGIC `StringIndexer` converts categorical strings (e.g., "Enterprise", "Mid-Market", "SMB") into
-# MAGIC numeric indices (0, 1, 2). We do this for all four categorical columns.
+# MAGIC We convert our Spark DataFrame to pandas (this works well for datasets that fit in driver memory,
+# MAGIC typically under ~10 GB). For our 10K-row dataset, this is instantaneous.
+# MAGIC
+# MAGIC Categorical columns are encoded using scikit-learn's `LabelEncoder`.
 
 # COMMAND ----------
 
 categorical_cols = ["seniority_level", "lead_source", "industry", "account_tier"]
 
-indexers = [
-    StringIndexer(
-        inputCol=col,
-        outputCol=f"{col}_idx",
-        handleInvalid="keep"  # Assign new index for unseen categories at inference time
-    )
-    for col in categorical_cols
-]
+# Convert to pandas for scikit-learn training
+pdf = df_features.toPandas()
 
-print("StringIndexer stages created for:", categorical_cols)
+# Encode categoricals with LabelEncoder
+label_encoders = {}
+for col in categorical_cols:
+    le = LabelEncoder()
+    pdf[col + "_idx"] = le.fit_transform(pdf[col].fillna("Unknown"))
+    label_encoders[col] = le
+
+print(f"Converted {len(pdf):,} rows to pandas. Categorical encoding complete.")
+print("Encoded columns:", [f"{c}_idx" for c in categorical_cols])
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2.3 — Assemble Feature Vector
+# MAGIC ## 2.3 — Assemble Feature Matrix
 # MAGIC
-# MAGIC `VectorAssembler` combines all numeric and indexed columns into a single `features` vector
-# MAGIC column — the format required by all Spark ML algorithms.
+# MAGIC In scikit-learn, we build the feature matrix as a NumPy array. We combine all numeric
+# MAGIC and encoded categorical columns, then apply `StandardScaler` for normalization.
 
 # COMMAND ----------
 
@@ -331,19 +351,6 @@ indexed_cols = [f"{col}_idx" for col in categorical_cols]
 
 all_feature_cols = numeric_cols + indexed_cols
 
-assembler = VectorAssembler(
-    inputCols=all_feature_cols,
-    outputCol="features_raw",
-    handleInvalid="skip",
-)
-
-scaler = StandardScaler(
-    inputCol="features_raw",
-    outputCol="features",
-    withStd=True,
-    withMean=True,
-)
-
 print(f"Feature vector will contain {len(all_feature_cols)} features:")
 for i, col in enumerate(all_feature_cols, 1):
     print(f"  {i:>2}. {col}")
@@ -353,21 +360,35 @@ for i, col in enumerate(all_feature_cols, 1):
 # MAGIC %md
 # MAGIC ## 2.4 — Train/Test Split
 # MAGIC
-# MAGIC We use an 80/20 split with a fixed seed for reproducibility.
+# MAGIC We use an 80/20 stratified split with a fixed seed for reproducibility.
 
 # COMMAND ----------
 
-# Cast 'converted' to double (Spark ML expects a numeric label column)
+# Keep a Spark DataFrame version with label for later use (Pandas UDF section)
 df_ml = df_features.withColumn("label", F.col("converted").cast("double"))
 
-train_df, test_df = df_ml.randomSplit([0.8, 0.2], seed=42)
+# Prepare feature matrix and labels
+X = pdf[all_feature_cols].fillna(0).values
+y = pdf["converted"].values
 
-print(f"Training set : {train_df.count():>6,} rows")
-print(f"Test set     : {test_df.count():>6,} rows")
+# Stratified train/test split
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+# Scale features
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+print(f"Training set : {len(X_train):>6,} rows")
+print(f"Test set     : {len(X_test):>6,} rows")
 
 # Check class balance
-print("\nClass distribution (training):")
-train_df.groupBy("label").count().orderBy("label").show()
+print(f"\nClass distribution (training):")
+unique, counts = np.unique(y_train, return_counts=True)
+for label, count in zip(unique, counts):
+    print(f"  Label {int(label)}: {count:>6,} ({count/len(y_train)*100:.1f}%)")
 
 # COMMAND ----------
 
@@ -375,24 +396,21 @@ train_df.groupBy("label").count().orderBy("label").show()
 # MAGIC ## 2.5 — Train Logistic Regression
 # MAGIC
 # MAGIC Logistic Regression is a fast, interpretable baseline for binary classification.
-# MAGIC In Spark ML, the optimization (L-BFGS) runs **distributed** across partitions.
+# MAGIC Using scikit-learn with Elastic Net regularization (L1/L2 mix).
 
 # COMMAND ----------
 
 lr = LogisticRegression(
-    featuresCol="features",
-    labelCol="label",
-    maxIter=100,
-    regParam=0.01,
-    elasticNetParam=0.5,  # L1/L2 mix (0.5 = Elastic Net)
+    max_iter=100,
+    C=100.0,          # Inverse of regParam (1/0.01)
+    penalty="elasticnet",
+    l1_ratio=0.5,     # L1/L2 mix (0.5 = Elastic Net)
+    solver="saga",    # Required for elasticnet penalty
+    random_state=42,
 )
 
-# Build the full pipeline: indexers → assembler → scaler → model
-lr_pipeline = Pipeline(stages=indexers + [assembler, scaler, lr])
-
-# Fit the pipeline
-print("Training Logistic Regression pipeline...")
-lr_model = lr_pipeline.fit(train_df)
+print("Training Logistic Regression...")
+lr.fit(X_train, y_train)
 print("Training complete.")
 
 # COMMAND ----------
@@ -400,24 +418,20 @@ print("Training complete.")
 # MAGIC %md
 # MAGIC ## 2.6 — Train Random Forest
 # MAGIC
-# MAGIC Random Forest is an ensemble method that trains many decision trees in parallel —
-# MAGIC a natural fit for Spark's distributed architecture. Each tree can be trained on a
-# MAGIC different partition of the data.
+# MAGIC Random Forest is an ensemble method that trains many decision trees in parallel.
+# MAGIC scikit-learn parallelizes tree construction using `n_jobs=-1` (all available cores).
 
 # COMMAND ----------
 
 rf = RandomForestClassifier(
-    featuresCol="features",
-    labelCol="label",
-    numTrees=100,
-    maxDepth=10,
-    seed=42,
+    n_estimators=100,
+    max_depth=10,
+    random_state=42,
+    n_jobs=-1,  # Use all available CPU cores
 )
 
-rf_pipeline = Pipeline(stages=indexers + [assembler, scaler, rf])
-
-print("Training Random Forest pipeline (100 trees)...")
-rf_model = rf_pipeline.fit(train_df)
+print("Training Random Forest (100 trees)...")
+rf.fit(X_train, y_train)
 print("Training complete.")
 
 # COMMAND ----------
@@ -432,18 +446,15 @@ print("Training complete.")
 
 # COMMAND ----------
 
-# Evaluators
-binary_eval = BinaryClassificationEvaluator(labelCol="label", metricName="areaUnderROC")
-accuracy_eval = MulticlassClassificationEvaluator(labelCol="label", metricName="accuracy")
-f1_eval = MulticlassClassificationEvaluator(labelCol="label", metricName="f1")
-
 results = {}
 
-for name, model in [("Logistic Regression", lr_model), ("Random Forest", rf_model)]:
-    predictions = model.transform(test_df)
-    auc = binary_eval.evaluate(predictions)
-    acc = accuracy_eval.evaluate(predictions)
-    f1 = f1_eval.evaluate(predictions)
+for name, model in [("Logistic Regression", lr), ("Random Forest", rf)]:
+    y_pred = model.predict(X_test)
+    y_prob = model.predict_proba(X_test)[:, 1]
+
+    auc = roc_auc_score(y_test, y_prob)
+    acc = accuracy_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred)
 
     results[name] = {"AUC": auc, "Accuracy": acc, "F1": f1}
 
@@ -466,11 +477,8 @@ for name, model in [("Logistic Regression", lr_model), ("Random Forest", rf_mode
 
 # COMMAND ----------
 
-import pandas as pd
-
-# Extract the Random Forest model from the pipeline (last stage)
-rf_classifier = rf_model.stages[-1]
-importances = rf_classifier.featureImportances.toArray()
+# Extract feature importances from the trained Random Forest
+importances = rf.feature_importances_
 
 # Map to feature names
 importance_df = pd.DataFrame({
@@ -494,22 +502,19 @@ for rank, (_, row) in enumerate(importance_df.head(15).iterrows(), 1):
 
 # COMMAND ----------
 
-predictions_rf = rf_model.transform(test_df)
+y_pred_rf = rf.predict(X_test)
+y_prob_rf = rf.predict_proba(X_test)[:, 1]
 
-(
-    predictions_rf
-    .select(
-        "contact_id",
-        "label",
-        "prediction",
-        "probability",
-        "engagement_score",
-        "fit_score",
-        "total_activities",
-        "demo_count",
-    )
-    .show(10, truncate=False)
-)
+# Note: X_test values are scaled, so we show the raw probabilities and labels
+predictions_pdf = pd.DataFrame({
+    "label": y_test.astype(float),
+    "prediction": y_pred_rf.astype(float),
+    "probability": y_prob_rf,
+})
+
+# Display as Spark DataFrame for consistent notebook output
+print("Sample predictions (Random Forest):")
+spark.createDataFrame(predictions_pdf).show(10, truncate=False)
 
 # COMMAND ----------
 
@@ -553,32 +558,13 @@ psdf.head()
 # COMMAND ----------
 
 from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, classification_report
-from sklearn.preprocessing import LabelEncoder
-import numpy as np
+from sklearn.metrics import classification_report
 
-# Convert to pandas (fits in memory for our 10K-row dataset)
-pdf = df_features.toPandas()
+# Re-use the pandas DataFrame, feature matrix, and train/test split from Section 2.
+# We also keep the same feature columns for consistency.
+sklearn_feature_cols = all_feature_cols  # alias for Section 3.3 reference
 
-# Encode categoricals with LabelEncoder
-label_encoders = {}
-for col in categorical_cols:
-    le = LabelEncoder()
-    pdf[col + "_encoded"] = le.fit_transform(pdf[col].fillna("Unknown"))
-    label_encoders[col] = le
-
-# Prepare feature matrix
-sklearn_feature_cols = numeric_cols + [f"{c}_encoded" for c in categorical_cols]
-X = pdf[sklearn_feature_cols].fillna(0).values
-y = pdf["converted"].values
-
-# Train/test split
-from sklearn.model_selection import train_test_split
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-
-# Train Gradient Boosting
+# Train Gradient Boosting (a third model for comparison)
 gbt = GradientBoostingClassifier(
     n_estimators=200,
     max_depth=5,
@@ -588,15 +574,15 @@ gbt = GradientBoostingClassifier(
 gbt.fit(X_train, y_train)
 
 # Evaluate
-y_pred = gbt.predict(X_test)
-y_prob = gbt.predict_proba(X_test)[:, 1]
+y_pred_gbt = gbt.predict(X_test)
+y_prob_gbt = gbt.predict_proba(X_test)[:, 1]
 
 print("Gradient Boosting (scikit-learn) — Test Results:")
-print(f"  AUC-ROC  : {roc_auc_score(y_test, y_prob):.4f}")
-print(f"  Accuracy : {accuracy_score(y_test, y_pred):.4f}")
-print(f"  F1 Score : {f1_score(y_test, y_pred):.4f}")
+print(f"  AUC-ROC  : {roc_auc_score(y_test, y_prob_gbt):.4f}")
+print(f"  Accuracy : {accuracy_score(y_test, y_pred_gbt):.4f}")
+print(f"  F1 Score : {f1_score(y_test, y_pred_gbt):.4f}")
 print()
-print(classification_report(y_test, y_pred, target_names=["Not Converted", "Converted"]))
+print(classification_report(y_test, y_pred_gbt, target_names=["Not Converted", "Converted"]))
 
 # COMMAND ----------
 
@@ -609,7 +595,7 @@ print(classification_report(y_test, y_pred, target_names=["Not Converted", "Conv
 # MAGIC
 # MAGIC This is the **best pattern for distributed inference** with scikit-learn models:
 # MAGIC 1. Train a model on the driver (as above)
-# MAGIC 2. Broadcast the model to all workers
+# MAGIC 2. Serialize the model (pickle) and capture via closure
 # MAGIC 3. Apply it via a Pandas UDF across all partitions
 # MAGIC
 
@@ -620,11 +606,13 @@ from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import DoubleType
 import pickle
 
-# Broadcast the trained sklearn model to all workers
-model_broadcast = spark.sparkContext.broadcast(gbt)
+# On serverless compute, spark.sparkContext.broadcast() is not available.
+# Instead, we serialize the model with pickle and let Spark distribute it via closure serialization.
+# This works well for small models (< a few hundred MB).
 
-# Broadcast the feature column list (order matters for the model)
-feature_cols_broadcast = spark.sparkContext.broadcast(sklearn_feature_cols)
+model_bytes = pickle.dumps(gbt)
+scaler_bytes = pickle.dumps(scaler)  # Also serialize the scaler for feature normalization
+feature_cols_list = list(sklearn_feature_cols)  # plain Python list for closure capture
 
 # COMMAND ----------
 
@@ -639,16 +627,23 @@ feature_cols_broadcast = spark.sparkContext.broadcast(sklearn_feature_cols)
 @pandas_udf(DoubleType())
 def predict_conversion_probability(*cols: pd.Series) -> pd.Series:
     """
-    Distributed inference using a broadcasted scikit-learn model.
+    Distributed inference using a serialized scikit-learn model.
     Each argument is a pandas Series corresponding to one feature column.
     Returns a pandas Series of predicted conversion probabilities.
+
+    The model is captured via closure (pickle-serialized bytes) rather than
+    spark.sparkContext.broadcast(), which is not available on serverless compute.
     """
+    import pickle as _pickle
     # Stack all feature columns into a 2D numpy array
     features = pd.concat(cols, axis=1).fillna(0).values
-    # Get the model from the broadcast variable
-    model = model_broadcast.value
+    # Deserialize the scaler and model from the closure-captured pickle bytes
+    _scaler = _pickle.loads(scaler_bytes)
+    model = _pickle.loads(model_bytes)
+    # Scale features (same normalization as training)
+    features_scaled = _scaler.transform(features)
     # Predict probability of class 1 (converted)
-    probabilities = model.predict_proba(features)[:, 1]
+    probabilities = model.predict_proba(features_scaled)[:, 1]
     return pd.Series(probabilities)
 
 # COMMAND ----------
@@ -661,22 +656,28 @@ def predict_conversion_probability(*cols: pd.Series) -> pd.Series:
 
 # COMMAND ----------
 
-# We need to encode categoricals in Spark before passing to the UDF.
-# Use the StringIndexer outputs from Section 2 for consistency.
+# We need to encode categoricals in Spark SQL before passing to the UDF.
+# On serverless, pyspark.ml.feature.StringIndexer is not available, so we
+# use a pure Spark SQL approach: map each category to its LabelEncoder index
+# using CASE WHEN expressions (derived from the encoders we already fitted).
 
-# Re-transform using our fitted pipeline's indexers (just the indexer+assembler stages)
-from pyspark.ml import Pipeline
-
-# Fit indexers on full dataset
-encoding_pipeline = Pipeline(stages=indexers)
-encoding_model = encoding_pipeline.fit(df_ml)
-df_encoded = encoding_model.transform(df_ml)
+# Build category-to-index mappings from our fitted LabelEncoders
+for col in categorical_cols:
+    le = label_encoders[col]
+    mapping = {cls: int(idx) for idx, cls in enumerate(le.classes_)}
+    # Build a CASE WHEN expression for this column
+    case_expr = "CASE "
+    for cat_val, idx_val in mapping.items():
+        safe_val = cat_val.replace("'", "\\'")
+        case_expr += f"WHEN {col} = '{safe_val}' THEN {idx_val} "
+    case_expr += f"ELSE {len(mapping)} END"  # unknown category gets next index
+    df_ml = df_ml.withColumn(f"{col}_idx", F.expr(case_expr))
 
 # Build the list of columns to pass to the UDF (same order as sklearn training)
 udf_input_cols = numeric_cols + [f"{c}_idx" for c in categorical_cols]
 
 # Apply the pandas UDF for distributed scoring
-df_scored = df_encoded.withColumn(
+df_scored = df_ml.withColumn(
     "conversion_probability",
     predict_conversion_probability(*[F.col(c) for c in udf_input_cols])
 )

@@ -126,6 +126,28 @@ for t in tables:
 
 # COMMAND ----------
 
+# MAGIC %pip install openai databricks-sdk --quiet
+
+# COMMAND ----------
+
+# Fix typing_extensions path precedence on serverless compute
+import subprocess, sys
+subprocess.check_call([sys.executable, "-m", "pip", "install", "typing_extensions>=4.5", "--target", "/tmp/pip_overrides", "--upgrade", "--quiet"])
+sys.path.insert(0, "/tmp/pip_overrides")
+
+# Reload typing_extensions from the updated path
+import importlib
+if "typing_extensions" in sys.modules:
+    del sys.modules["typing_extensions"]
+import typing_extensions
+importlib.reload(typing_extensions)
+
+# COMMAND ----------
+
+# MAGIC %run ./_config
+
+# COMMAND ----------
+
 from openai import OpenAI
 
 # Create the client pointing to Databricks Model Serving

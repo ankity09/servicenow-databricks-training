@@ -11,7 +11,7 @@
 # MAGIC
 # MAGIC | Section | Topic | Key Concepts |
 # MAGIC |---------|-------|-------------|
-# MAGIC | 1 | Hyperparameter Tuning at Scale | Hyperopt + SparkTrials, Optuna, distributed search |
+# MAGIC | 1 | Hyperparameter Tuning at Scale | Hyperopt + Trials, Optuna, hyperparameter search |
 # MAGIC | 2 | MLflow & Unity Catalog Model Registry | Experiment tracking, model versioning, aliases |
 # MAGIC | 3 | Model Serving Deployment | Real-time endpoints, auto-scaling, A/B testing |
 # MAGIC | 4 | Inference Tables & Monitoring | Drift detection, latency monitoring, alerting |
@@ -48,7 +48,7 @@ print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 
 # COMMAND ----------
 
-%pip install xgboost lightgbm optuna hyperopt mlflow scikit-learn matplotlib seaborn --quiet
+# MAGIC %pip install xgboost lightgbm optuna hyperopt mlflow scikit-learn matplotlib seaborn --quiet
 
 # COMMAND ----------
 
@@ -56,7 +56,6 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
-# Re-establish config after Python restart
 # MAGIC %run ./_config
 
 # COMMAND ----------
@@ -75,7 +74,7 @@ print(f"Config reloaded: {catalog}.{schema}")
 # MAGIC
 # MAGIC 1. **Rebuild the feature table** using the same joins from notebook 01
 # MAGIC 2. **Train XGBoost** with scikit-learn API (runs on the driver, but tuning is distributed)
-# MAGIC 3. **Use Hyperopt + SparkTrials** to distribute hyperparameter search across Spark workers
+# MAGIC 3. **Use Hyperopt + Trials** to run hyperparameter search (serverless-compatible)
 # MAGIC 4. **Compare with Optuna** as an alternative tuning framework
 # MAGIC
 
@@ -234,26 +233,27 @@ print(f"Target rate  : {y.mean():.2%} converted")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 1.3 Distributed Hyperparameter Tuning with Hyperopt + SparkTrials
+# MAGIC ### 1.3 Hyperparameter Tuning with Hyperopt (Serverless-Compatible)
 # MAGIC
 # MAGIC **How it works:**
 # MAGIC
 # MAGIC ```
 # MAGIC ┌───────────────────────────────────────────────────┐
-# MAGIC │                  Spark Driver                     │
+# MAGIC │              Serverless Compute Driver             │
 # MAGIC │   Hyperopt TPE Suggest  ──>  fmin() coordinator  │
-# MAGIC └──────────────┬──────────┬──────────┬─────────────┘
-# MAGIC                │          │          │
-# MAGIC          ┌─────▼───┐ ┌───▼─────┐ ┌─▼───────┐
-# MAGIC          │ Worker 1│ │ Worker 2│ │ Worker 3│
-# MAGIC          │ Trial 1 │ │ Trial 2 │ │ Trial 3 │
-# MAGIC          │ XGBoost │ │ XGBoost │ │ XGBoost │
-# MAGIC          └─────────┘ └─────────┘ └─────────┘
+# MAGIC │                                                   │
+# MAGIC │   Trial 1 ──> Trial 2 ──> Trial 3 ──> ...       │
+# MAGIC │   XGBoost     XGBoost     XGBoost                │
+# MAGIC │   (sequential on driver)                          │
+# MAGIC └───────────────────────────────────────────────────┘
 # MAGIC ```
 # MAGIC
-# MAGIC - `SparkTrials` distributes each Hyperopt trial as a Spark task
+# MAGIC - `Trials` runs each Hyperopt trial sequentially on the driver (serverless-compatible)
 # MAGIC - Each trial trains a full XGBoost model with a different hyperparameter combo
 # MAGIC - All trials are automatically logged to MLflow
+# MAGIC
+# MAGIC > **Note:** `SparkTrials` is not supported on serverless compute because it
+# MAGIC > requires `sparkContext`. We use `Trials` instead, which works on all compute types.
 # MAGIC
 
 # COMMAND ----------
@@ -261,7 +261,7 @@ print(f"Target rate  : {y.mean():.2%} converted")
 import mlflow
 import mlflow.xgboost
 from xgboost import XGBClassifier
-from hyperopt import fmin, tpe, hp, Trials, STATUS_OK, SparkTrials
+from hyperopt import fmin, tpe, hp, Trials, STATUS_OK
 
 # Set the MLflow experiment for this module
 mlflow.set_experiment(f"/Users/{username}/servicenow_lead_scoring")
@@ -269,11 +269,17 @@ mlflow.set_experiment(f"/Users/{username}/servicenow_lead_scoring")
 # COMMAND ----------
 
 # ── Define the search space ──────────────────────────────────────
+# hp.choice passes the *actual chosen value* to the objective function,
+# but fmin() returns *indices* in best_params. Keep lookup lists for decoding.
+MAX_DEPTH_OPTIONS = [3, 4, 5, 6, 7, 8, 10]
+N_ESTIMATORS_OPTIONS = [50, 100, 150, 200, 300]
+MIN_CHILD_WEIGHT_OPTIONS = [1, 3, 5, 7, 10]
+
 search_space = {
     "learning_rate":    hp.loguniform("learning_rate", np.log(0.01), np.log(0.3)),
-    "max_depth":        hp.choice("max_depth", [3, 4, 5, 6, 7, 8, 10]),
-    "n_estimators":     hp.choice("n_estimators", [50, 100, 150, 200, 300]),
-    "min_child_weight": hp.choice("min_child_weight", [1, 3, 5, 7, 10]),
+    "max_depth":        hp.choice("max_depth", MAX_DEPTH_OPTIONS),
+    "n_estimators":     hp.choice("n_estimators", N_ESTIMATORS_OPTIONS),
+    "min_child_weight": hp.choice("min_child_weight", MIN_CHILD_WEIGHT_OPTIONS),
     "subsample":        hp.uniform("subsample", 0.6, 1.0),
     "colsample_bytree": hp.uniform("colsample_bytree", 0.6, 1.0),
     "gamma":            hp.uniform("gamma", 0, 0.5),
@@ -284,11 +290,15 @@ def objective(params):
     """
     Train an XGBoost model with the given hyperparameters.
     Returns the negative AUC (because Hyperopt minimizes).
+
+    Note: hp.choice passes the actual chosen value (not the index)
+    to the objective function. No index mapping needed here.
     """
-    # hp.choice returns an index -- extract the actual value
-    params["max_depth"]        = [3, 4, 5, 6, 7, 8, 10][params["max_depth"]]
-    params["n_estimators"]     = [50, 100, 150, 200, 300][params["n_estimators"]]
-    params["min_child_weight"] = [1, 3, 5, 7, 10][params["min_child_weight"]]
+    params = dict(params)  # shallow copy to avoid mutating trial data
+    # Ensure integer types for XGBoost params that require int
+    params["max_depth"]        = int(params["max_depth"])
+    params["n_estimators"]     = int(params["n_estimators"])
+    params["min_child_weight"] = int(params["min_child_weight"])
 
     with mlflow.start_run(nested=True):
         model = XGBClassifier(
@@ -318,17 +328,17 @@ def objective(params):
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC **Running 20 trials with distributed SparkTrials...**
+# MAGIC **Running 20 trials with Hyperopt Trials...**
 # MAGIC
-# MAGIC Each trial trains a separate XGBoost model. SparkTrials will distribute
-# MAGIC these across available workers.
+# MAGIC Each trial trains a separate XGBoost model sequentially on the driver.
+# MAGIC This is compatible with serverless compute.
 
 # COMMAND ----------
 
 # ── Run Hyperopt ─────────────────────────────────────────────────
-# SparkTrials distributes trials across Spark workers
-# parallelism controls how many trials run concurrently
-spark_trials = SparkTrials(parallelism=4)
+# Trials runs sequentially on the driver (serverless-compatible)
+# Note: SparkTrials is NOT supported on serverless compute
+trials = Trials()
 
 with mlflow.start_run(run_name="hyperopt_xgboost_tuning") as parent_run:
     best_params = fmin(
@@ -336,7 +346,7 @@ with mlflow.start_run(run_name="hyperopt_xgboost_tuning") as parent_run:
         space=search_space,
         algo=tpe.suggest,
         max_evals=20,
-        trials=spark_trials,
+        trials=trials,
         rstate=np.random.default_rng(42),
     )
 
@@ -351,9 +361,9 @@ print(f"Parent run ID: {parent_run_id}")
 # hp.choice returns indices, so we map them back to actual values
 best_decoded = {
     "learning_rate":    best_params["learning_rate"],
-    "max_depth":        [3, 4, 5, 6, 7, 8, 10][best_params["max_depth"]],
-    "n_estimators":     [50, 100, 150, 200, 300][best_params["n_estimators"]],
-    "min_child_weight": [1, 3, 5, 7, 10][best_params["min_child_weight"]],
+    "max_depth":        MAX_DEPTH_OPTIONS[int(best_params["max_depth"])],
+    "n_estimators":     N_ESTIMATORS_OPTIONS[int(best_params["n_estimators"])],
+    "min_child_weight": MIN_CHILD_WEIGHT_OPTIONS[int(best_params["min_child_weight"])],
     "subsample":        best_params["subsample"],
     "colsample_bytree": best_params["colsample_bytree"],
     "gamma":            best_params["gamma"],
@@ -378,6 +388,8 @@ for k, v in best_decoded.items():
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+import tempfile
+import os
 from sklearn.metrics import roc_curve
 
 # ── Train the champion model ─────────────────────────────────────
@@ -435,7 +447,7 @@ axes[1].set_ylabel("Actual")
 axes[1].set_title("Confusion Matrix")
 
 plt.tight_layout()
-plt.savefig("/tmp/model_evaluation.png", dpi=150, bbox_inches="tight")
+plt.savefig(os.path.join(tempfile.gettempdir(), "model_evaluation.png"), dpi=150, bbox_inches="tight")
 plt.show()
 
 # COMMAND ----------
@@ -444,7 +456,7 @@ plt.show()
 # MAGIC ### 1.5 Bonus: Hyperparameter Tuning with Optuna
 # MAGIC
 # MAGIC [Optuna](https://optuna.org/) is another popular hyperparameter tuning framework.
-# MAGIC While Hyperopt integrates natively with Spark via `SparkTrials`, Optuna offers
+# MAGIC While Hyperopt integrates natively with Databricks, Optuna offers
 # MAGIC a clean API with powerful features like pruning (early stopping of bad trials)
 # MAGIC and a built-in dashboard.
 # MAGIC
@@ -505,18 +517,21 @@ for k, v in study.best_params.items():
 # MAGIC %md
 # MAGIC ### Hyperopt vs. Optuna -- Quick Comparison
 # MAGIC
-# MAGIC | Feature | Hyperopt + SparkTrials | Optuna |
-# MAGIC |---------|----------------------|--------|
-# MAGIC | **Distributed trials** | Native via SparkTrials | Requires external storage (e.g., MySQL) |
+# MAGIC | Feature | Hyperopt (Trials) | Optuna |
+# MAGIC |---------|-------------------|--------|
+# MAGIC | **Serverless support** | Yes (with `Trials`) | Yes |
 # MAGIC | **Search algorithms** | TPE, Random | TPE, CMA-ES, Grid, Random, and more |
 # MAGIC | **Pruning** | Not built-in | Built-in (MedianPruner, etc.) |
-# MAGIC | **MLflow integration** | Automatic with SparkTrials | Manual (but straightforward) |
+# MAGIC | **MLflow integration** | Manual logging | Manual (but straightforward) |
 # MAGIC | **API style** | Functional (`fmin`) | Object-oriented (`study.optimize`) |
 # MAGIC | **Databricks native** | Yes | Community-supported |
 # MAGIC
-# MAGIC **Recommendation:** Use **Hyperopt + SparkTrials** when running on Databricks for
-# MAGIC seamless distributed tuning and MLflow integration. Use **Optuna** when you need
-# MAGIC advanced pruning or are working in a non-Databricks environment.
+# MAGIC **Recommendation:** Both **Hyperopt** and **Optuna** work on serverless compute.
+# MAGIC Use Hyperopt for its native Databricks integration. Use Optuna when you need
+# MAGIC advanced pruning or more flexible search algorithms.
+# MAGIC
+# MAGIC > **Note:** `SparkTrials` (distributed Hyperopt) requires `sparkContext` and is only
+# MAGIC > available on classic (non-serverless) compute. On serverless, use `Trials` instead.
 
 # COMMAND ----------
 
@@ -590,8 +605,8 @@ with mlflow.start_run(run_name="xgboost_champion_candidate") as run:
     ax_imp.set_xlabel("Feature Importance (Gain)")
     ax_imp.set_title("Top Feature Importances -- XGBoost Lead Scoring")
     plt.tight_layout()
-    fig_imp.savefig("/tmp/feature_importance.png", dpi=150, bbox_inches="tight")
-    mlflow.log_artifact("/tmp/feature_importance.png")
+    fig_imp.savefig(os.path.join(tempfile.gettempdir(), "feature_importance.png"), dpi=150, bbox_inches="tight")
+    mlflow.log_artifact(os.path.join(tempfile.gettempdir(), "feature_importance.png"))
     plt.show()
 
     # ── Log confusion matrix plot ────────────────────────────────
@@ -604,8 +619,8 @@ with mlflow.start_run(run_name="xgboost_champion_candidate") as run:
     ax_cm.set_ylabel("Actual")
     ax_cm.set_title("Confusion Matrix")
     plt.tight_layout()
-    fig_cm.savefig("/tmp/confusion_matrix.png", dpi=150, bbox_inches="tight")
-    mlflow.log_artifact("/tmp/confusion_matrix.png")
+    fig_cm.savefig(os.path.join(tempfile.gettempdir(), "confusion_matrix.png"), dpi=150, bbox_inches="tight")
+    mlflow.log_artifact(os.path.join(tempfile.gettempdir(), "confusion_matrix.png"))
     plt.show()
 
     # ── Log feature list as JSON artifact ────────────────────────
@@ -615,14 +630,14 @@ with mlflow.start_run(run_name="xgboost_champion_candidate") as run:
         "numeric_columns": numeric_cols,
         "target_column": target_col,
     }
-    with open("/tmp/feature_metadata.json", "w") as f:
+    with open(os.path.join(tempfile.gettempdir(), "feature_metadata.json"), "w") as f:
         json.dump(feature_meta, f, indent=2)
-    mlflow.log_artifact("/tmp/feature_metadata.json")
+    mlflow.log_artifact(os.path.join(tempfile.gettempdir(), "feature_metadata.json"))
 
     # ── Log tags for searchability ───────────────────────────────
     mlflow.set_tag("model_purpose", "lead_scoring")
     mlflow.set_tag("dataset", f"{catalog}.{schema}.gtm_lead_scores")
-    mlflow.set_tag("tuning_method", "hyperopt_spark_trials")
+    mlflow.set_tag("tuning_method", "hyperopt_trials")
     mlflow.set_tag("training_event", "servicenow_workshop")
 
     print(f"\nRun logged successfully!")
@@ -727,8 +742,15 @@ from mlflow.entities.model_registry import ModelVersionTag
 versions = client.search_model_versions(f"name='{model_name}'")
 
 for v in versions:
-    aliases = v.aliases if hasattr(v, "aliases") else []
-    alias_str = f" [aliases: {', '.join(aliases)}]" if aliases else ""
+    raw_aliases = v.aliases if hasattr(v, "aliases") else []
+    # Handle aliases as list, dict, or other types across MLflow versions
+    if isinstance(raw_aliases, dict):
+        alias_list = list(raw_aliases.keys())
+    elif isinstance(raw_aliases, (list, tuple)):
+        alias_list = list(raw_aliases)
+    else:
+        alias_list = []
+    alias_str = f" [aliases: {', '.join(alias_list)}]" if alias_list else ""
     print(f"  Version {v.version}: status={v.status}{alias_str}")
     if v.description:
         print(f"    Description: {v.description[:80]}...")
@@ -778,7 +800,6 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import (
     EndpointCoreConfigInput,
     ServedEntityInput,
-    AutoCaptureConfigInput,
 )
 import time
 
@@ -788,6 +809,9 @@ endpoint_name = "servicenow-lead-scoring"
 # COMMAND ----------
 
 # ── Define the endpoint configuration ────────────────────────────
+# Note: Legacy AutoCaptureConfigInput (inference tables) is deprecated.
+# Use AI Gateway inference tables instead (configured via the UI or
+# AI Gateway APIs). We create the endpoint without auto_capture_config.
 served_entities = [
     ServedEntityInput(
         entity_name=model_name,
@@ -799,12 +823,6 @@ served_entities = [
 
 endpoint_config = EndpointCoreConfigInput(
     served_entities=served_entities,
-    auto_capture_config=AutoCaptureConfigInput(
-        catalog_name=catalog,
-        schema_name=schema,
-        enabled=True,                      # Enable inference tables
-        table_name_prefix="lead_scoring",  # Inference table prefix
-    ),
 )
 
 # ── Create or update the endpoint ────────────────────────────────
@@ -812,25 +830,34 @@ try:
     # Check if endpoint already exists
     existing = w.serving_endpoints.get(endpoint_name)
     print(f"Endpoint '{endpoint_name}' already exists. Updating configuration...")
-    w.serving_endpoints.update_config(
-        name=endpoint_name,
-        served_entities=served_entities,
-        auto_capture_config=AutoCaptureConfigInput(
-            catalog_name=catalog,
-            schema_name=schema,
-            enabled=True,
-            table_name_prefix="lead_scoring",
-        ),
-    )
-    print("Endpoint configuration updated.")
+    try:
+        w.serving_endpoints.update_config(
+            name=endpoint_name,
+            served_entities=served_entities,
+        )
+        print("Endpoint configuration updated.")
+    except Exception as update_err:
+        if "ResourceConflict" in str(type(update_err).__name__) or "currently being updated" in str(update_err):
+            print(f"Endpoint is currently being updated from a previous run. Skipping update.")
+            print(f"Current endpoint state will be used.")
+        else:
+            raise
 except Exception as e:
     if "RESOURCE_DOES_NOT_EXIST" in str(e) or "does not exist" in str(e).lower() or "404" in str(e):
         print(f"Creating new endpoint '{endpoint_name}'...")
-        w.serving_endpoints.create(
-            name=endpoint_name,
-            config=endpoint_config,
-        )
-        print("Endpoint creation initiated. This may take 5-15 minutes to become ready.")
+        try:
+            w.serving_endpoints.create(
+                name=endpoint_name,
+                config=endpoint_config,
+            )
+            print("Endpoint creation initiated. This may take 5-15 minutes to become ready.")
+        except Exception as create_err:
+            if "already exists" in str(create_err).lower() or "ResourceConflict" in str(type(create_err).__name__):
+                print(f"Endpoint was created concurrently. Proceeding.")
+            else:
+                raise
+    elif "ResourceConflict" in str(type(e).__name__) or "currently being updated" in str(e):
+        print(f"Endpoint is currently being updated. Skipping. Proceeding with existing endpoint.")
     else:
         print(f"Error managing endpoint: {e}")
         raise
@@ -1015,15 +1042,9 @@ except Exception as e:
 # MAGIC | `served_entity_name` | Which model version served it |
 # MAGIC | `client_request_id` | For request tracing |
 # MAGIC
-# MAGIC We already enabled inference tables when creating the endpoint:
-# MAGIC ```python
-# MAGIC auto_capture_config=AutoCaptureConfigInput(
-# MAGIC     catalog_name=catalog,
-# MAGIC     schema_name=schema,
-# MAGIC     enabled=True,
-# MAGIC     table_name_prefix="lead_scoring",
-# MAGIC )
-# MAGIC ```
+# MAGIC Inference tables can be enabled via **AI Gateway** (the recommended approach),
+# MAGIC which replaces the legacy `AutoCaptureConfigInput`. Configure inference tables
+# MAGIC through the Databricks UI under Serving > Endpoint > AI Gateway settings.
 # MAGIC
 # MAGIC The inference table will be created at:
 # MAGIC `{catalog}.{schema}.lead_scoring_<endpoint_name>_payload`
@@ -1056,60 +1077,81 @@ except Exception as e:
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Request volume over time (last 24 hours)
-# MAGIC -- Note: This query works once the endpoint has served traffic
-# MAGIC SELECT
-# MAGIC   date_trunc('hour', request_time) AS hour,
-# MAGIC   COUNT(*) AS request_count,
-# MAGIC   AVG(execution_time_ms) AS avg_latency_ms,
-# MAGIC   PERCENTILE(execution_time_ms, 0.95) AS p95_latency_ms,
-# MAGIC   PERCENTILE(execution_time_ms, 0.99) AS p99_latency_ms
-# MAGIC FROM system.serving.served_model_requests
-# MAGIC WHERE
-# MAGIC   served_entity_name LIKE '%lead_scoring%'
-# MAGIC   AND request_time > current_timestamp() - INTERVAL 24 HOURS
-# MAGIC GROUP BY 1
-# MAGIC ORDER BY 1
+# ── Query system tables for serving metrics ──────────────────────
+# Note: system.serving tables may not be available in all workspaces.
+# These queries are wrapped in try/except so the notebook continues
+# even if system tables are not enabled.
+
+try:
+    # Request volume over time (last 24 hours)
+    request_volume_df = spark.sql("""
+        SELECT
+          date_trunc('hour', request_time) AS hour,
+          COUNT(*) AS request_count,
+          AVG(execution_time_ms) AS avg_latency_ms,
+          PERCENTILE(execution_time_ms, 0.95) AS p95_latency_ms,
+          PERCENTILE(execution_time_ms, 0.99) AS p99_latency_ms
+        FROM system.serving.served_model_requests
+        WHERE
+          served_entity_name LIKE '%lead_scoring%'
+          AND request_time > current_timestamp() - INTERVAL 24 HOURS
+        GROUP BY 1
+        ORDER BY 1
+    """)
+    display(request_volume_df)
+except Exception as e:
+    print(f"System table query skipped: {type(e).__name__}")
+    print("system.serving tables may not be enabled in this workspace.")
+    print("This is expected -- these queries demonstrate monitoring patterns.")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Error rate monitoring
-# MAGIC SELECT
-# MAGIC   date_trunc('hour', request_time) AS hour,
-# MAGIC   COUNT(*) AS total_requests,
-# MAGIC   SUM(CASE WHEN status_code != 200 THEN 1 ELSE 0 END) AS error_count,
-# MAGIC   ROUND(
-# MAGIC     SUM(CASE WHEN status_code != 200 THEN 1 ELSE 0 END) * 100.0 / COUNT(*),
-# MAGIC     2
-# MAGIC   ) AS error_rate_pct
-# MAGIC FROM system.serving.served_model_requests
-# MAGIC WHERE
-# MAGIC   served_entity_name LIKE '%lead_scoring%'
-# MAGIC   AND request_time > current_timestamp() - INTERVAL 24 HOURS
-# MAGIC GROUP BY 1
-# MAGIC ORDER BY 1
+try:
+    # Error rate monitoring
+    error_rate_df = spark.sql("""
+        SELECT
+          date_trunc('hour', request_time) AS hour,
+          COUNT(*) AS total_requests,
+          SUM(CASE WHEN status_code != 200 THEN 1 ELSE 0 END) AS error_count,
+          ROUND(
+            SUM(CASE WHEN status_code != 200 THEN 1 ELSE 0 END) * 100.0 / COUNT(*),
+            2
+          ) AS error_rate_pct
+        FROM system.serving.served_model_requests
+        WHERE
+          served_entity_name LIKE '%lead_scoring%'
+          AND request_time > current_timestamp() - INTERVAL 24 HOURS
+        GROUP BY 1
+        ORDER BY 1
+    """)
+    display(error_rate_df)
+except Exception as e:
+    print(f"Error rate query skipped: {type(e).__name__}")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Latency distribution by served entity (useful for A/B testing)
-# MAGIC SELECT
-# MAGIC   served_entity_name,
-# MAGIC   COUNT(*) AS request_count,
-# MAGIC   ROUND(AVG(execution_time_ms), 1) AS avg_latency_ms,
-# MAGIC   ROUND(PERCENTILE(execution_time_ms, 0.50), 1) AS p50_latency_ms,
-# MAGIC   ROUND(PERCENTILE(execution_time_ms, 0.95), 1) AS p95_latency_ms,
-# MAGIC   ROUND(PERCENTILE(execution_time_ms, 0.99), 1) AS p99_latency_ms,
-# MAGIC   MIN(request_time) AS first_request,
-# MAGIC   MAX(request_time) AS last_request
-# MAGIC FROM system.serving.served_model_requests
-# MAGIC WHERE
-# MAGIC   served_entity_name LIKE '%lead_scoring%'
-# MAGIC   AND request_time > current_timestamp() - INTERVAL 7 DAYS
-# MAGIC GROUP BY 1
-# MAGIC ORDER BY request_count DESC
+try:
+    # Latency distribution by served entity (useful for A/B testing)
+    latency_df = spark.sql("""
+        SELECT
+          served_entity_name,
+          COUNT(*) AS request_count,
+          ROUND(AVG(execution_time_ms), 1) AS avg_latency_ms,
+          ROUND(PERCENTILE(execution_time_ms, 0.50), 1) AS p50_latency_ms,
+          ROUND(PERCENTILE(execution_time_ms, 0.95), 1) AS p95_latency_ms,
+          ROUND(PERCENTILE(execution_time_ms, 0.99), 1) AS p99_latency_ms,
+          MIN(request_time) AS first_request,
+          MAX(request_time) AS last_request
+        FROM system.serving.served_model_requests
+        WHERE
+          served_entity_name LIKE '%lead_scoring%'
+          AND request_time > current_timestamp() - INTERVAL 7 DAYS
+        GROUP BY 1
+        ORDER BY request_count DESC
+    """)
+    display(latency_df)
+except Exception as e:
+    print(f"Latency query skipped: {type(e).__name__}")
 
 # COMMAND ----------
 
@@ -1576,7 +1618,7 @@ else:
 # MAGIC
 # MAGIC | Topic | Key Databricks Feature | Why It Matters |
 # MAGIC |-------|----------------------|----------------|
-# MAGIC | Hyperparameter tuning | Hyperopt + SparkTrials | Distributed search across Spark workers |
+# MAGIC | Hyperparameter tuning | Hyperopt + Trials | Serverless-compatible hyperparameter search |
 # MAGIC | Experiment tracking | MLflow | Full reproducibility: params, metrics, artifacts |
 # MAGIC | Model registry | Unity Catalog | Centralized governance, lineage, aliases |
 # MAGIC | Model serving | Serverless endpoints | Real-time predictions with auto-scaling |

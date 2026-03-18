@@ -48,12 +48,43 @@ print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 
 # COMMAND ----------
 
-# MAGIC %pip install mlflow>=2.14.0 openai databricks-sdk --quiet
-# MAGIC dbutils.library.restartPython()
+# MAGIC %pip install mlflow openai databricks-sdk --quiet
 
 # COMMAND ----------
 
-# Re-establish config after Python restart
+# Fix typing_extensions conflict on serverless compute:
+# The system typing_extensions is too old for openai/pydantic but takes precedence on sys.path.
+# We overwrite the system copy with a newer version so all imports find it correctly.
+import subprocess, sys, importlib, shutil, glob as globmod
+
+# Install to a temp location
+subprocess.check_call([sys.executable, "-m", "pip", "install", "typing_extensions>=4.12", "--target", "/tmp/te_fix", "--quiet", "--no-deps"])
+
+# Find the system typing_extensions location and overwrite it
+system_te = "/databricks/python/lib/python3.10/site-packages/typing_extensions.py"
+new_te = "/tmp/te_fix/typing_extensions.py"
+try:
+    shutil.copy2(new_te, system_te)
+    print(f"Replaced system typing_extensions with newer version")
+except PermissionError:
+    # If system path is read-only, prepend to sys.path instead
+    sys.path.insert(0, "/tmp/te_fix")
+    print(f"Added /tmp/te_fix to sys.path (system path is read-only)")
+
+# Clear cached modules
+mods_to_remove = [k for k in sys.modules if k == "typing_extensions" or k.startswith("typing_extensions.")]
+for mod in mods_to_remove:
+    del sys.modules[mod]
+importlib.invalidate_caches()
+
+import typing_extensions
+print(f"typing_extensions loaded from: {typing_extensions.__file__}")
+# Verify the fix worked
+assert hasattr(typing_extensions, "deprecated"), "typing_extensions fix failed: 'deprecated' not available"
+print("typing_extensions fix verified successfully")
+
+# COMMAND ----------
+
 # MAGIC %run ./_config
 
 # COMMAND ----------
@@ -772,7 +803,108 @@ print("This model wraps our agent loop, tool definitions, and system prompt into
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 2.2 — Log the Agent with MLflow
+# MAGIC ### 2.2 — Save Agent Code for Code-Based Logging
+# MAGIC
+# MAGIC Modern MLflow recommends **code-based logging** instead of pickle-based serialization.
+# MAGIC We save the agent class to a Python file, then log with `code_paths`.
+
+# COMMAND ----------
+
+# Write the agent class to a standalone Python file for code-based MLflow logging
+import os, textwrap
+
+agent_code_dir = "/tmp/gtm_agent_code"
+os.makedirs(agent_code_dir, exist_ok=True)
+
+agent_code = textwrap.dedent('''
+import mlflow
+from mlflow.pyfunc import PythonModel
+import pandas as pd
+
+class GTMAssistantAgent(PythonModel):
+    """
+    A GTM Strategy Assistant Agent packaged as an MLflow model.
+    Uses Databricks Foundation Models for LLM and Vector Search for RAG.
+    """
+
+    def load_context(self, context):
+        """Called once when the model is loaded for serving."""
+        import os
+        from openai import OpenAI
+        from databricks.sdk import WorkspaceClient
+
+        self.client = OpenAI(
+            api_key=os.environ.get("DATABRICKS_TOKEN", ""),
+            base_url=os.environ.get("DATABRICKS_HOST", "") + "/serving-endpoints"
+        )
+        self.w = WorkspaceClient()
+        self.model_name = "databricks-meta-llama-3-3-70b-instruct"
+        self.catalog = os.environ.get("CATALOG", "ankit_yadav")
+        self.schema = os.environ.get("SCHEMA", "servicenow_training")
+        self.vs_index = f"{self.catalog}.{self.schema}.gtm_knowledge_vs_index"
+
+        self.tools = [
+            {"type": "function", "function": {"name": "query_accounts", "description": "Query GTM account data by industry, revenue, tier, or region.", "parameters": {"type": "object", "properties": {"industry": {"type": "string"}, "min_revenue": {"type": "number"}, "account_tier": {"type": "string"}, "region": {"type": "string"}, "limit": {"type": "integer"}}, "required": []}}},
+            {"type": "function", "function": {"name": "search_knowledge_base", "description": "Search product docs, playbooks, and competitive intel.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "num_results": {"type": "integer"}}, "required": ["query"]}}},
+            {"type": "function", "function": {"name": "analyze_pipeline", "description": "Analyze sales pipeline by stage with metrics.", "parameters": {"type": "object", "properties": {"stage": {"type": "string"}, "include_details": {"type": "boolean"}}, "required": []}}}
+        ]
+
+        self.system_prompt = """You are a senior GTM Strategy Assistant. Use your tools to answer questions with real data. Be concise, cite your sources, and format responses for executives."""
+
+    def _execute_tool(self, name, args):
+        return f"[Tool {name} called with {args} - results would appear here in production]"
+
+    def predict(self, context, model_input, params=None):
+        import json
+
+        if isinstance(model_input, pd.DataFrame):
+            if "messages" in model_input.columns:
+                queries = model_input["messages"].tolist()
+            elif "inputs" in model_input.columns:
+                queries = model_input["inputs"].tolist()
+            else:
+                queries = model_input.iloc[:, 0].tolist()
+        elif isinstance(model_input, list):
+            queries = model_input
+        else:
+            queries = [str(model_input)]
+
+        responses = []
+        for query in queries:
+            messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": str(query)}
+            ]
+            for _ in range(3):
+                response = self.client.chat.completions.create(
+                    model=self.model_name, messages=messages, tools=self.tools,
+                    tool_choice="auto", max_tokens=800, temperature=0.2
+                )
+                msg = response.choices[0].message
+                if msg.tool_calls:
+                    messages.append({"role": "assistant", "content": msg.content or "",
+                        "tool_calls": [{"id": tc.id, "type": "function",
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                            for tc in msg.tool_calls]})
+                    for tc in msg.tool_calls:
+                        result = self._execute_tool(tc.function.name, tc.function.arguments)
+                        messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+                else:
+                    responses.append(msg.content)
+                    break
+            else:
+                responses.append("Agent could not produce a response.")
+        return responses
+
+# Required for code-based logging
+mlflow.models.set_model(GTMAssistantAgent())
+''').strip()
+
+agent_code_path = os.path.join(agent_code_dir, "gtm_agent.py")
+with open(agent_code_path, "w") as f:
+    f.write(agent_code)
+
+print(f"Agent code saved to: {agent_code_path}")
 
 # COMMAND ----------
 
@@ -784,12 +916,12 @@ print(f"MLflow experiment: {experiment_name}")
 
 # COMMAND ----------
 
-# Log the agent model to MLflow
+# Log the agent model to MLflow using code-based logging
 with mlflow.start_run(run_name="gtm_assistant_v1") as run:
-    # Log the model
+    # Log the model using code_paths (no pickle serialization needed)
     model_info = mlflow.pyfunc.log_model(
         artifact_path="gtm_agent",
-        python_model=GTMAssistantAgent(),
+        python_model=agent_code_path,
         pip_requirements=[
             "mlflow>=2.14.0",
             "openai>=1.0.0",
