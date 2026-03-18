@@ -1,0 +1,20 @@
+# Instructor-only materials (not shared with trainees)
+instructor_guide/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Databricks
+.databricks/
