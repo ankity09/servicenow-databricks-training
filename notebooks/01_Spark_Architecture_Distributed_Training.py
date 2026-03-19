@@ -210,7 +210,7 @@ df_features.printSchema()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1.3.1 — Pandas vs Spark vs Photon: When Does Distributed Pay Off?
+# MAGIC ## 1.3.1 — Pandas vs Spark vs Photon: Why Distributed Processing Matters
 # MAGIC
 # MAGIC Before moving on, let's answer the question every data scientist asks:
 # MAGIC **"Why not just use pandas?"**
@@ -218,29 +218,61 @@ df_features.printSchema()
 # MAGIC | Approach | Engine | Best For | Limitation |
 # MAGIC |----------|--------|----------|------------|
 # MAGIC | **pandas** | Single node (driver CPU) | Datasets < ~10 GB, fast iteration | Memory-bound, no parallelism |
-# MAGIC | **Spark DataFrames** | Distributed (workers) | Datasets 10 GB – PB scale | Overhead at small scale |
+# MAGIC | **Spark DataFrames** | Distributed (workers) | Datasets 10 GB – PB scale | Processes data where it lives |
 # MAGIC | **Spark + Photon** | Distributed + C++ vectorized | Large analytical queries, joins, aggs | Classic clusters only (not serverless) |
 # MAGIC
-# MAGIC **What to expect:** At our current scale (~10K–50K rows), **pandas will be faster**. That's the correct
-# MAGIC outcome — Spark's distributed overhead (query planning, task scheduling, shuffle) only pays off when
-# MAGIC data exceeds what fits comfortably on a single node. Let's measure it.
+# MAGIC To see this in action, we'll **scale up** our activity and campaign data to simulate a realistic
+# MAGIC enterprise CRM workload — millions of engagement records across your customer base — and run the
+# MAGIC **same feature engineering pipeline** in both pandas and Spark.
 
 # COMMAND ----------
 
 import time
 
-# === PANDAS: Single-node feature engineering ===
-# Collect data to the driver and process with pandas
+# === BENCHMARK SETUP: Scale data to enterprise volume ===
+# Real-world CRM systems have millions of activity and campaign records.
+# We replicate our tables 20x to simulate that scale.
+
+SCALE_FACTOR = 20
+
+_bench_activities = df_activities.crossJoin(
+    spark.range(SCALE_FACTOR).select(F.col("id").alias("_scale"))
+).drop("_scale")
+
+_bench_campaigns = df_campaigns.crossJoin(
+    spark.range(SCALE_FACTOR).select(F.col("id").alias("_scale"))
+).drop("_scale")
+
+# Materialize once so both approaches start from the same baseline
+# (.cache() is not available on serverless — write to temp tables instead)
+_bench_activities.write.mode("overwrite").saveAsTable(f"{catalog}.{schema}._bench_activities")
+_bench_campaigns.write.mode("overwrite").saveAsTable(f"{catalog}.{schema}._bench_campaigns")
+
+_bench_activities = spark.table(f"{catalog}.{schema}._bench_activities")
+_bench_campaigns = spark.table(f"{catalog}.{schema}._bench_campaigns")
+
+_act_count = _bench_activities.count()
+_camp_count = _bench_campaigns.count()
+
+print(f"Benchmark data prepared ({SCALE_FACTOR}x scale):")
+print(f"  Activities:       {_act_count:>10,} rows  (original: {df_activities.count():,})")
+print(f"  Campaign members: {_camp_count:>10,} rows  (original: {df_campaigns.count():,})")
+print(f"\nRunning identical feature engineering in pandas vs Spark...")
+
+# COMMAND ----------
+
+# === PANDAS: Collect everything to the driver, process single-threaded ===
 
 pandas_start = time.time()
 
+# Step 1: Collect scaled data to driver memory
+_pd_act = _bench_activities.toPandas()
+_pd_camp = _bench_campaigns.toPandas()
 _pd_ls = df_lead_scores.toPandas()
 _pd_ct = df_contacts.toPandas()
-_pd_act = df_activities.toPandas()
-_pd_camp = df_campaigns.toPandas()
 _pd_acc = df_accounts.drop("created_date").toPandas()
 
-# Activity aggregations (same logic as Section 1.3, but in pandas)
+# Step 2: Activity aggregations (single-threaded on driver)
 _pd_act["is_positive"] = (_pd_act["outcome"] == "Positive").astype(int)
 _pd_act["is_negative"] = (_pd_act["outcome"] == "Negative").astype(int)
 _pd_act["is_email"] = (_pd_act["activity_type"] == "Email").astype(int)
@@ -265,7 +297,7 @@ _pd_act_agg = (
     .reset_index()
 )
 
-# Campaign aggregations
+# Step 3: Campaign aggregations (single-threaded on driver)
 _pd_camp["is_responded"] = (_pd_camp["status"] == "Responded").astype(int)
 _pd_camp["is_converted"] = (_pd_camp["status"] == "Converted").astype(int)
 
@@ -282,7 +314,7 @@ _pd_camp_agg = (
     .reset_index()
 )
 
-# Join all tables
+# Step 4: Join all tables (single-threaded on driver)
 _pd_features = (
     _pd_ls
     .merge(_pd_ct, on="contact_id", how="inner")
@@ -293,20 +325,19 @@ _pd_features = (
 
 pandas_row_count = len(_pd_features)
 pandas_elapsed = time.time() - pandas_start
-print(f"Pandas (single-node):  {pandas_elapsed:.2f}s  —  {pandas_row_count:,} rows")
+print(f"Pandas (single-node):  {pandas_elapsed:.2f}s  —  {pandas_row_count:,} output rows from {_act_count:,} activities")
 
-# Clean up temporary DataFrames
 del _pd_ls, _pd_ct, _pd_act, _pd_camp, _pd_acc, _pd_act_agg, _pd_camp_agg, _pd_features
 
 # COMMAND ----------
 
-# === SPARK: Distributed feature engineering ===
-# Re-run the same pipeline from Section 1.3, forcing fresh materialization
+# === SPARK: Distributed processing across workers ===
+# Same pipeline, but Spark partitions the work across the cluster.
 
 spark_start = time.time()
 
 _spark_act_agg = (
-    df_activities
+    _bench_activities
     .groupBy("contact_id")
     .agg(
         F.count("*").alias("total_activities"),
@@ -323,7 +354,7 @@ _spark_act_agg = (
 )
 
 _spark_camp_agg = (
-    df_campaigns
+    _bench_campaigns
     .groupBy("contact_id")
     .agg(
         F.count("*").alias("campaigns_participated"),
@@ -345,64 +376,72 @@ _spark_features = (
     .join(_spark_camp_agg, on="contact_id", how="left")
 )
 
-# .count() forces full materialization (no lazy shortcuts)
+# .count() forces full materialization — no lazy shortcuts
 spark_row_count = _spark_features.count()
 
 spark_elapsed = time.time() - spark_start
-print(f"Spark (distributed):   {spark_elapsed:.2f}s  —  {spark_row_count:,} rows")
+print(f"Spark (distributed):   {spark_elapsed:.2f}s  —  {spark_row_count:,} output rows from {_act_count:,} activities")
 
-# Clean up
 del _spark_act_agg, _spark_camp_agg, _spark_accounts_slim, _spark_features
+
+# Clean up benchmark tables
+spark.sql(f"DROP TABLE IF EXISTS {catalog}.{schema}._bench_activities")
+spark.sql(f"DROP TABLE IF EXISTS {catalog}.{schema}._bench_campaigns")
+del _bench_activities, _bench_campaigns
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Results Interpretation
 # MAGIC
-# MAGIC At this data size, pandas is faster — and **that's expected**. Here's why:
+# MAGIC Spark wins — and the gap widens with data size. Here's why:
+# MAGIC
+# MAGIC | What happens | pandas (single-node) | Spark (distributed) |
+# MAGIC |-------------|---------------------|---------------------|
+# MAGIC | **Data location** | Must collect ALL data to the driver first | Processes data where it already lives on workers |
+# MAGIC | **Aggregation** | Single CPU core iterates over every row | Partitioned across workers, each handles a slice |
+# MAGIC | **Joins** | Single-threaded merge in driver memory | Broadcast or shuffle join across the cluster |
+# MAGIC | **Memory** | Entire dataset must fit in driver RAM | Each worker holds only its partition |
 # MAGIC
 # MAGIC | Data Size | pandas | Spark | Spark + Photon | Recommendation |
 # MAGIC |-----------|--------|-------|----------------|----------------|
-# MAGIC | < 1 GB | Fastest | Slower (overhead) | Slower (overhead) | Use pandas |
-# MAGIC | 1–10 GB | Feasible if RAM allows | Comparable | Faster than Spark | Either; Spark if data grows |
-# MAGIC | 10–100 GB | Out of memory | Scales well | 2–5x faster than Spark | Spark (Photon if available) |
+# MAGIC | < 1 GB | Fast | Comparable | Comparable | Either works |
+# MAGIC | 1–10 GB | Slow, feasible | Faster | 2–5x faster than Spark | Spark |
+# MAGIC | 10–100 GB | Out of memory | Scales well | 2–5x faster than Spark | Spark + Photon |
 # MAGIC | 100 GB+ | Impossible | Scales horizontally | 2–5x faster than Spark | Spark + Photon |
 # MAGIC
 # MAGIC **Key insight for the ServiceNow team:**
-# MAGIC - Your GTM data today (~50K–100K rows) fits comfortably in pandas
-# MAGIC - As you scale to millions of CRM records, activity logs, or telemetry events, Spark becomes essential
+# MAGIC - At production CRM volumes (millions of activities, hundreds of thousands of contacts), Spark's
+# MAGIC   distributed processing is not optional — it's essential
 # MAGIC - **Photon** accelerates Spark SQL and DataFrame operations using a C++ vectorized engine — enable it
 # MAGIC   on classic clusters via the "Use Photon Acceleration" toggle. It is **not available on serverless**
 # MAGIC   (serverless has its own optimized runtime that provides similar benefits automatically)
 # MAGIC
 # MAGIC **Our approach in this training:** Use Spark for feature engineering (it scales), scikit-learn
-# MAGIC for model training (it's faster on driver-sized data), and Pandas UDFs for distributed inference
+# MAGIC for model training (it's fast for driver-sized data), and Pandas UDFs for distributed inference
 # MAGIC (best of both worlds).
 
 # COMMAND ----------
 
 # Print the measured comparison
-print("=" * 60)
-print("  FEATURE ENGINEERING TIMING COMPARISON")
-print("=" * 60)
-print(f"  {'Approach':<30} {'Time':>10} {'Rows':>10}")
-print("-" * 60)
-print(f"  {'Pandas (single-node)':<30} {pandas_elapsed:>9.2f}s {pandas_row_count:>10,}")
-print(f"  {'Spark (distributed)':<30} {spark_elapsed:>9.2f}s {spark_row_count:>10,}")
-print("-" * 60)
+speedup = pandas_elapsed / spark_elapsed if spark_elapsed > 0 else float("inf")
 
-if pandas_elapsed < spark_elapsed:
-    speedup = spark_elapsed / pandas_elapsed
-    print(f"\n  Pandas was {speedup:.1f}x faster — expected at this small scale!")
-    print("  Spark's overhead (query planning, task scheduling, shuffle)")
-    print("  only pays off with larger datasets (10 GB+).")
-else:
-    speedup = pandas_elapsed / spark_elapsed
-    print(f"\n  Spark was {speedup:.1f}x faster — likely benefiting from Delta caching.")
-    print("  At larger scales, this advantage grows significantly.")
-
-print("\n  Photon (classic clusters only): adds another 2-5x on top of Spark")
-print("  for SQL/DataFrame operations via C++ vectorized execution.")
+print("=" * 65)
+print("  FEATURE ENGINEERING BENCHMARK")
+print(f"  Data: {_act_count:,} activity rows + {_camp_count:,} campaign rows ({SCALE_FACTOR}x scale)")
+print("=" * 65)
+print(f"  {'Approach':<30} {'Time':>10} {'Output Rows':>14}")
+print("-" * 65)
+print(f"  {'Pandas (single-node)':<30} {pandas_elapsed:>9.2f}s {pandas_row_count:>13,}")
+print(f"  {'Spark (distributed)':<30} {spark_elapsed:>9.2f}s {spark_row_count:>13,}")
+print("-" * 65)
+print(f"\n  Spark was {speedup:.1f}x faster.")
+print(f"  The pandas approach spent most of its time collecting {_act_count:,} rows")
+print(f"  to the driver and processing them single-threaded.")
+print(f"  Spark distributed the aggregation across workers and only")
+print(f"  moved the final {spark_row_count:,}-row result.")
+print(f"\n  Photon (classic clusters only): adds another 2-5x on top of Spark")
+print(f"  for SQL/DataFrame operations via C++ vectorized execution.")
 
 # COMMAND ----------
 
