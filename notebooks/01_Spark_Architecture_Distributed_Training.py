@@ -210,6 +210,203 @@ df_features.printSchema()
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## 1.3.1 — Pandas vs Spark vs Photon: When Does Distributed Pay Off?
+# MAGIC
+# MAGIC Before moving on, let's answer the question every data scientist asks:
+# MAGIC **"Why not just use pandas?"**
+# MAGIC
+# MAGIC | Approach | Engine | Best For | Limitation |
+# MAGIC |----------|--------|----------|------------|
+# MAGIC | **pandas** | Single node (driver CPU) | Datasets < ~10 GB, fast iteration | Memory-bound, no parallelism |
+# MAGIC | **Spark DataFrames** | Distributed (workers) | Datasets 10 GB – PB scale | Overhead at small scale |
+# MAGIC | **Spark + Photon** | Distributed + C++ vectorized | Large analytical queries, joins, aggs | Classic clusters only (not serverless) |
+# MAGIC
+# MAGIC **What to expect:** At our current scale (~10K–50K rows), **pandas will be faster**. That's the correct
+# MAGIC outcome — Spark's distributed overhead (query planning, task scheduling, shuffle) only pays off when
+# MAGIC data exceeds what fits comfortably on a single node. Let's measure it.
+
+# COMMAND ----------
+
+import time
+
+# === PANDAS: Single-node feature engineering ===
+# Collect data to the driver and process with pandas
+
+pandas_start = time.time()
+
+_pd_ls = df_lead_scores.toPandas()
+_pd_ct = df_contacts.toPandas()
+_pd_act = df_activities.toPandas()
+_pd_camp = df_campaigns.toPandas()
+_pd_acc = df_accounts.drop("created_date").toPandas()
+
+# Activity aggregations (same logic as Section 1.3, but in pandas)
+_pd_act["is_positive"] = (_pd_act["outcome"] == "Positive").astype(int)
+_pd_act["is_negative"] = (_pd_act["outcome"] == "Negative").astype(int)
+_pd_act["is_email"] = (_pd_act["activity_type"] == "Email").astype(int)
+_pd_act["is_meeting"] = (_pd_act["activity_type"] == "Meeting").astype(int)
+_pd_act["is_demo"] = (_pd_act["activity_type"] == "Demo").astype(int)
+_pd_act["is_call"] = (_pd_act["activity_type"] == "Call").astype(int)
+
+_pd_act_agg = (
+    _pd_act.groupby("contact_id")
+    .agg(
+        total_activities=("contact_id", "count"),
+        avg_sentiment=("sentiment_score", "mean"),
+        positive_outcomes=("is_positive", "sum"),
+        negative_outcomes=("is_negative", "sum"),
+        email_count=("is_email", "sum"),
+        meeting_count=("is_meeting", "sum"),
+        demo_count=("is_demo", "sum"),
+        call_count=("is_call", "sum"),
+        avg_duration_minutes=("duration_minutes", "mean"),
+        last_activity_date=("activity_date", "max"),
+    )
+    .reset_index()
+)
+
+# Campaign aggregations
+_pd_camp["is_responded"] = (_pd_camp["status"] == "Responded").astype(int)
+_pd_camp["is_converted"] = (_pd_camp["status"] == "Converted").astype(int)
+
+_pd_camp_agg = (
+    _pd_camp.groupby("contact_id")
+    .agg(
+        campaigns_participated=("contact_id", "count"),
+        email_opens_total=("email_opens", "sum"),
+        email_clicks_total=("email_clicks", "sum"),
+        form_fills_total=("form_fills", "sum"),
+        campaign_responses=("is_responded", "sum"),
+        campaign_conversions=("is_converted", "sum"),
+    )
+    .reset_index()
+)
+
+# Join all tables
+_pd_features = (
+    _pd_ls
+    .merge(_pd_ct, on="contact_id", how="inner")
+    .merge(_pd_acc, on="account_id", how="left")
+    .merge(_pd_act_agg, on="contact_id", how="left")
+    .merge(_pd_camp_agg, on="contact_id", how="left")
+)
+
+pandas_row_count = len(_pd_features)
+pandas_elapsed = time.time() - pandas_start
+print(f"Pandas (single-node):  {pandas_elapsed:.2f}s  —  {pandas_row_count:,} rows")
+
+# Clean up temporary DataFrames
+del _pd_ls, _pd_ct, _pd_act, _pd_camp, _pd_acc, _pd_act_agg, _pd_camp_agg, _pd_features
+
+# COMMAND ----------
+
+# === SPARK: Distributed feature engineering ===
+# Re-run the same pipeline from Section 1.3, forcing fresh materialization
+
+spark_start = time.time()
+
+_spark_act_agg = (
+    df_activities
+    .groupBy("contact_id")
+    .agg(
+        F.count("*").alias("total_activities"),
+        F.avg("sentiment_score").alias("avg_sentiment"),
+        F.sum(F.when(F.col("outcome") == "Positive", 1).otherwise(0)).alias("positive_outcomes"),
+        F.sum(F.when(F.col("outcome") == "Negative", 1).otherwise(0)).alias("negative_outcomes"),
+        F.sum(F.when(F.col("activity_type") == "Email", 1).otherwise(0)).alias("email_count"),
+        F.sum(F.when(F.col("activity_type") == "Meeting", 1).otherwise(0)).alias("meeting_count"),
+        F.sum(F.when(F.col("activity_type") == "Demo", 1).otherwise(0)).alias("demo_count"),
+        F.sum(F.when(F.col("activity_type") == "Call", 1).otherwise(0)).alias("call_count"),
+        F.avg("duration_minutes").alias("avg_duration_minutes"),
+        F.max("activity_date").alias("last_activity_date"),
+    )
+)
+
+_spark_camp_agg = (
+    df_campaigns
+    .groupBy("contact_id")
+    .agg(
+        F.count("*").alias("campaigns_participated"),
+        F.sum("email_opens").alias("email_opens_total"),
+        F.sum("email_clicks").alias("email_clicks_total"),
+        F.sum("form_fills").alias("form_fills_total"),
+        F.sum(F.when(F.col("status") == "Responded", 1).otherwise(0)).alias("campaign_responses"),
+        F.sum(F.when(F.col("status") == "Converted", 1).otherwise(0)).alias("campaign_conversions"),
+    )
+)
+
+_spark_accounts_slim = df_accounts.drop("created_date")
+
+_spark_features = (
+    df_lead_scores
+    .join(df_contacts, on="contact_id", how="inner")
+    .join(_spark_accounts_slim, on="account_id", how="left")
+    .join(_spark_act_agg, on="contact_id", how="left")
+    .join(_spark_camp_agg, on="contact_id", how="left")
+)
+
+# .count() forces full materialization (no lazy shortcuts)
+spark_row_count = _spark_features.count()
+
+spark_elapsed = time.time() - spark_start
+print(f"Spark (distributed):   {spark_elapsed:.2f}s  —  {spark_row_count:,} rows")
+
+# Clean up
+del _spark_act_agg, _spark_camp_agg, _spark_accounts_slim, _spark_features
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Results Interpretation
+# MAGIC
+# MAGIC At this data size, pandas is faster — and **that's expected**. Here's why:
+# MAGIC
+# MAGIC | Data Size | pandas | Spark | Spark + Photon | Recommendation |
+# MAGIC |-----------|--------|-------|----------------|----------------|
+# MAGIC | < 1 GB | Fastest | Slower (overhead) | Slower (overhead) | Use pandas |
+# MAGIC | 1–10 GB | Feasible if RAM allows | Comparable | Faster than Spark | Either; Spark if data grows |
+# MAGIC | 10–100 GB | Out of memory | Scales well | 2–5x faster than Spark | Spark (Photon if available) |
+# MAGIC | 100 GB+ | Impossible | Scales horizontally | 2–5x faster than Spark | Spark + Photon |
+# MAGIC
+# MAGIC **Key insight for the ServiceNow team:**
+# MAGIC - Your GTM data today (~50K–100K rows) fits comfortably in pandas
+# MAGIC - As you scale to millions of CRM records, activity logs, or telemetry events, Spark becomes essential
+# MAGIC - **Photon** accelerates Spark SQL and DataFrame operations using a C++ vectorized engine — enable it
+# MAGIC   on classic clusters via the "Use Photon Acceleration" toggle. It is **not available on serverless**
+# MAGIC   (serverless has its own optimized runtime that provides similar benefits automatically)
+# MAGIC
+# MAGIC **Our approach in this training:** Use Spark for feature engineering (it scales), scikit-learn
+# MAGIC for model training (it's faster on driver-sized data), and Pandas UDFs for distributed inference
+# MAGIC (best of both worlds).
+
+# COMMAND ----------
+
+# Print the measured comparison
+print("=" * 60)
+print("  FEATURE ENGINEERING TIMING COMPARISON")
+print("=" * 60)
+print(f"  {'Approach':<30} {'Time':>10} {'Rows':>10}")
+print("-" * 60)
+print(f"  {'Pandas (single-node)':<30} {pandas_elapsed:>9.2f}s {pandas_row_count:>10,}")
+print(f"  {'Spark (distributed)':<30} {spark_elapsed:>9.2f}s {spark_row_count:>10,}")
+print("-" * 60)
+
+if pandas_elapsed < spark_elapsed:
+    speedup = spark_elapsed / pandas_elapsed
+    print(f"\n  Pandas was {speedup:.1f}x faster — expected at this small scale!")
+    print("  Spark's overhead (query planning, task scheduling, shuffle)")
+    print("  only pays off with larger datasets (10 GB+).")
+else:
+    speedup = pandas_elapsed / spark_elapsed
+    print(f"\n  Spark was {speedup:.1f}x faster — likely benefiting from Delta caching.")
+    print("  At larger scales, this advantage grows significantly.")
+
+print("\n  Photon (classic clusters only): adds another 2-5x on top of Spark")
+print("  for SQL/DataFrame operations via C++ vectorized execution.")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## 1.4 — Inspect the Execution Plan
 # MAGIC
 # MAGIC Spark's **Catalyst optimizer** rewrites your query into an efficient physical plan. The `.explain(True)` method

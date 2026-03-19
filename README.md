@@ -27,8 +27,30 @@ Before the training, please ensure the following:
 2. **Python proficiency** — Comfortable with Python, pandas, and basic SQL
 3. **ML fundamentals** — Familiarity with classification, train/test splits, and evaluation metrics
 4. **LLM basics** — High-level understanding of what large language models are
+5. **Databricks Runtime** — DBR ML 15.4+ (serverless) or DBR ML 14.3+ (classic clusters)
+6. **Unity Catalog permissions** — The following grants on the training catalog/schema:
+   - `USE CATALOG`, `USE SCHEMA`, `SELECT`, `CREATE TABLE`
+   - `CREATE FUNCTION`, `CREATE MODEL` (required for Modules 2–4)
 
 No prior Databricks experience is required.
+
+---
+
+## Compute & Environment
+
+| Option | Runtime | When to Use |
+|--------|---------|-------------|
+| **Serverless** (recommended) | DBR ML 15.4+ | Zero config, auto-scales, best for training workshops |
+| **Classic cluster + Photon** | DBR ML 14.3+ | Needed for `TorchDistributor` (Module 1) or Spark ML pipeline APIs |
+
+### Sizing Guidance (Classic Clusters Only)
+
+| Cluster Type | Node Config | Use Case |
+|-------------|-------------|----------|
+| Classic — CPU | `i3.xlarge` x 2–4 workers | Spark ML pipelines, Hyperopt |
+| Classic — GPU | `g5.xlarge` x 1–2 workers | TorchDistributor, fine-tuning |
+
+> **What is Photon?** A C++ vectorized engine that accelerates Spark SQL and DataFrame operations 2–5x. Enable it on the cluster creation page under "Use Photon Acceleration." Photon is **not** available on serverless — serverless has its own optimized runtime.
 
 ---
 
@@ -134,5 +156,8 @@ After this session, explore self-paced preparation at [Databricks Academy](https
 | `Rate limit exceeded` on LLM calls | Wait 30 seconds and retry; Foundation Model endpoints have rate limits |
 | Import errors | Ensure you are running on serverless compute (not a classic cluster) |
 | Vector Search index not ready | Index sync can take a few minutes after creation — check status in the notebook |
+| `AnalysisException: Permission denied` | Ensure your user has `USE CATALOG`, `USE SCHEMA`, `SELECT`, `CREATE TABLE` on the training catalog |
+| Notebook fails on DBR < 14.3 | Upgrade to DBR ML 15.4+ (serverless) or DBR ML 14.3+ (classic) — older runtimes lack required APIs |
+| `pyspark.ml` not available on serverless | Expected — serverless restricts JVM-based Spark ML. Use scikit-learn instead (as shown in Module 1) |
 
 If you encounter any other issues, ask your instructor for help.
