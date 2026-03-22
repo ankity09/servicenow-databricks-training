@@ -1,6 +1,6 @@
-# Databricks Training: Machine Learning at Scale & Foundations of Gen AI
+# Databricks Training: Machine Learning at Scale and Foundations of Generative AI
 
-One-day hands-on training covering distributed ML, production MLOps, GenAI foundations, and agentic AI on the Databricks platform — all built around a realistic Go-To-Market (GTM) data scenario.
+A one-day, hands-on workshop covering distributed ML, production MLOps, GenAI foundations, and agentic AI on the Databricks platform. All modules use a shared Go-To-Market (GTM) dataset so that each exercise builds on the last, from raw data through a fully deployed AI agent.
 
 ---
 
@@ -23,14 +23,12 @@ One-day hands-on training covering distributed ML, production MLOps, GenAI found
 
 Before the training, please ensure the following:
 
-1. **Databricks workspace access** — You should be able to log into the provided workspace URL
-2. **Python proficiency** — Comfortable with Python, pandas, and basic SQL
-3. **ML fundamentals** — Familiarity with classification, train/test splits, and evaluation metrics
-4. **LLM basics** — High-level understanding of what large language models are
-5. **Databricks Runtime** — DBR ML 15.4+ (serverless) or DBR ML 14.3+ (classic clusters)
-6. **Unity Catalog permissions** — The following grants on the training catalog/schema:
-   - `USE CATALOG`, `USE SCHEMA`, `SELECT`, `CREATE TABLE`
-   - `CREATE FUNCTION`, `CREATE MODEL` (required for Modules 2–4)
+1. **Databricks workspace access** -- You must be able to log into the workspace URL provided by your instructor
+2. **Python proficiency** -- Comfortable with Python, pandas, and basic SQL
+3. **ML fundamentals** -- Familiarity with classification, train/test splits, and evaluation metrics
+4. **LLM basics** -- High-level understanding of what large language models are
+
+Your instructor will handle compute provisioning and Unity Catalog permissions ahead of time. The workshop uses **serverless compute** (DBR ML 15.4+), which requires no cluster configuration on your part.
 
 No prior Databricks experience is required.
 
@@ -51,6 +49,22 @@ No prior Databricks experience is required.
 | Classic — GPU | `g5.xlarge` x 1–2 workers | TorchDistributor, fine-tuning |
 
 > **What is Photon?** A C++ vectorized engine that accelerates Spark SQL and DataFrame operations 2–5x. Enable it on the cluster creation page under "Use Photon Acceleration." Photon is **not** available on serverless — serverless has its own optimized runtime.
+
+---
+
+## Repository Structure
+
+```
+servicenow-databricks-training/
+  notebooks/
+    _config.py                                  # Shared configuration (catalog, schema, endpoints)
+    00_Setup_and_Data_Generation.py             # Data setup
+    01_Spark_Architecture_Distributed_Training.py
+    02_Advanced_MLOps_Production_Governance.py
+    03_GenAI_Foundations_Agent_Design.py
+    04_Custom_Agents_Evaluation_Governance.py
+  README.md
+```
 
 ---
 
@@ -102,22 +116,22 @@ All notebooks use a unified **Go-To-Market** scenario with synthetic Salesforce-
 ## Notebook Descriptions
 
 ### `_config.py` — Shared Configuration
-Central settings file. All catalog names, schema names, model endpoints, and credentials are defined here. Other notebooks inherit these via `%run ./_config`.
+Central settings file defining the catalog, schema, model endpoints, and Vector Search endpoint used across all notebooks. Other notebooks inherit these values via `%run ./_config`. Your instructor will confirm the correct settings before the session.
 
 ### `00_Setup_and_Data_Generation` — Environment Setup
-Creates the Unity Catalog schema and generates all synthetic GTM datasets. Run this first (or confirm your instructor has already run it).
+Creates the Unity Catalog schema and generates all synthetic GTM datasets (accounts, contacts, opportunities, activities, campaigns, lead scores, and a knowledge base). Run this first, or confirm your instructor has already run it. Takes approximately 2-3 minutes.
 
 ### `01_Spark_Architecture_Distributed_Training` — Module 1
-Covers Spark internals (execution plans, partitioning, shuffles), then builds distributed ML pipelines with Spark ML, Pandas API on Spark, and Pandas UDFs. Introduces `pyspark.ml.connect` and `TorchDistributor`.
+Covers Spark internals (execution plans, partitioning, shuffles, broadcast vs. sort-merge joins) and then builds distributed ML pipelines using Spark ML, the Pandas API on Spark, and Pandas UDFs. Includes a hands-on performance comparison between pandas, Spark, and Photon at realistic data volumes. Also introduces `pyspark.ml.connect` and `TorchDistributor` for deep learning workloads.
 
 ### `02_Advanced_MLOps_Production_Governance` — Module 2
-Scales hyperparameter search with Hyperopt + SparkTrials, tracks experiments in MLflow, registers models to Unity Catalog, deploys to Model Serving, enables Inference Tables, and sets up drift monitoring.
+Scales hyperparameter tuning with Hyperopt (and compares it to Optuna), tracks experiments in MLflow, registers models to Unity Catalog, deploys a real-time Model Serving endpoint, and configures A/B testing with Inference Tables. Covers the full path from experimentation to production monitoring.
 
 ### `03_GenAI_Foundations_Agent_Design` — Module 3
-Explores Foundation Model APIs and prompt engineering, builds a Vector Search index over the knowledge base, creates agent tools for structured and unstructured retrieval, and introduces Agent Bricks and MCP.
+Introduces Foundation Model APIs and prompt engineering patterns (zero-shot, few-shot, chain-of-thought). Builds a Vector Search index over the GTM knowledge base for retrieval-augmented generation (RAG). Creates agent tools for both structured SQL queries and unstructured document retrieval, and introduces the Agent Bricks framework and Model Context Protocol (MCP).
 
 ### `04_Custom_Agents_Evaluation_Governance` — Module 4
-Builds a complete GTM assistant agent with tool calling, wraps it as an MLflow model, covers AI Gateway governance, enables MLflow tracing, and evaluates agent quality with LLM-as-judge.
+Builds a complete GTM assistant agent using the OpenAI SDK with tool calling, wraps it as an MLflow `ResponsesAgent` for deployment, and covers AI Gateway for governance and guardrails. Enables end-to-end MLflow tracing and evaluates agent quality with LLM-as-judge scoring across relevance, groundedness, and safety dimensions.
 
 ---
 
@@ -143,7 +157,7 @@ This training covers topics from two Databricks certifications:
 - **Databricks Machine Learning Professional** — Spark ML, Hyperopt, MLflow, model serving, monitoring
 - **Databricks Generative AI Engineer Associate** — Foundation Models, Vector Search, RAG, agent evaluation
 
-After this session, explore self-paced preparation at [Databricks Academy](https://www.databricks.com/learn/training/catalog).
+After this session, explore self-paced preparation at [Databricks Academy](https://www.databricks.com/learn/certification).
 
 ---
 
@@ -154,10 +168,11 @@ After this session, explore self-paced preparation at [Databricks Academy](https
 | `Table not found` errors | Run notebook `00` first to create the data |
 | Slow model serving startup | Endpoints can take 5-10 minutes to provision — this is normal |
 | `Rate limit exceeded` on LLM calls | Wait 30 seconds and retry; Foundation Model endpoints have rate limits |
-| Import errors | Ensure you are running on serverless compute (not a classic cluster) |
+| `ModuleNotFoundError` for a library | Serverless includes most ML/AI libraries. If a library is missing, add `%pip install <package>` at the top of the notebook and restart the Python environment |
 | Vector Search index not ready | Index sync can take a few minutes after creation — check status in the notebook |
 | `AnalysisException: Permission denied` | Ensure your user has `USE CATALOG`, `USE SCHEMA`, `SELECT`, `CREATE TABLE` on the training catalog |
 | Notebook fails on DBR < 14.3 | Upgrade to DBR ML 15.4+ (serverless) or DBR ML 14.3+ (classic) — older runtimes lack required APIs |
 | `pyspark.ml` not available on serverless | Expected — serverless restricts JVM-based Spark ML. Use scikit-learn instead (as shown in Module 1) |
+| `SparkTrials` fails on serverless | Serverless does not support `SparkTrials`. Use `hyperopt.Trials()` instead (single-node tuning) |
 
 If you encounter any other issues, ask your instructor for help.

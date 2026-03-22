@@ -35,6 +35,11 @@
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Verify that the shared configuration loaded correctly and activate our training namespace.
+
+# COMMAND ----------
+
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"USE SCHEMA {schema}")
 print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
@@ -60,6 +65,11 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC After installing libraries (which restarts the Python process), reload the shared configuration.
+
+# COMMAND ----------
+
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"USE SCHEMA {schema}")
 print(f"Config reloaded: {catalog}.{schema}")
@@ -70,7 +80,9 @@ print(f"Config reloaded: {catalog}.{schema}")
 # MAGIC ---
 # MAGIC # Section 1: Hyperparameter Tuning at Scale
 # MAGIC
-# MAGIC In Module 1 we trained basic Spark ML models. Now we level up:
+# MAGIC In Notebook 01 we used scikit-learn on the Spark driver. Here we step up to **XGBoost** -- a gradient-boosted tree algorithm that is the industry standard for tabular ML. We pair it with **Hyperopt** for intelligent hyperparameter search.
+# MAGIC
+# MAGIC Now we level up:
 # MAGIC
 # MAGIC 1. **Rebuild the feature table** using the same joins from notebook 01
 # MAGIC 2. **Train XGBoost** with scikit-learn API (runs on the driver, but tuning is distributed)
@@ -97,6 +109,13 @@ contacts     = spark.table(f"{catalog}.{schema}.gtm_contacts")
 opportunities = spark.table(f"{catalog}.{schema}.gtm_opportunities")
 activities   = spark.table(f"{catalog}.{schema}.gtm_activities")
 lead_scores  = spark.table(f"{catalog}.{schema}.gtm_lead_scores")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Validate that all training tables from Notebook 00 loaded successfully.
+
+# COMMAND ----------
 
 print("Table row counts:")
 print(f"  accounts      : {accounts.count():,}")
@@ -235,6 +254,8 @@ print(f"Target rate  : {y.mean():.2%} converted")
 # MAGIC %md
 # MAGIC ### 1.3 Hyperparameter Tuning with Hyperopt (Serverless-Compatible)
 # MAGIC
+# MAGIC **Hyperopt** is a Bayesian optimization library -- instead of trying every combination (grid search), it learns from previous trials to focus on promising parameter regions.
+# MAGIC
 # MAGIC **How it works:**
 # MAGIC
 # MAGIC ```
@@ -248,7 +269,7 @@ print(f"Target rate  : {y.mean():.2%} converted")
 # MAGIC └───────────────────────────────────────────────────┘
 # MAGIC ```
 # MAGIC
-# MAGIC - `Trials` runs each Hyperopt trial sequentially on the driver (serverless-compatible)
+# MAGIC - `Trials()` runs sequentially on the driver -- compatible with serverless. `SparkTrials()` distributes trials across worker nodes -- requires a classic multi-node cluster.
 # MAGIC - Each trial trains a full XGBoost model with a different hyperparameter combo
 # MAGIC - All trials are automatically logged to MLflow
 # MAGIC
@@ -331,7 +352,8 @@ def objective(params):
 # MAGIC **Running 20 trials with Hyperopt Trials...**
 # MAGIC
 # MAGIC Each trial trains a separate XGBoost model sequentially on the driver.
-# MAGIC This is compatible with serverless compute.
+# MAGIC This is compatible with serverless compute. The search uses TPE (Tree-structured Parzen Estimator),
+# MAGIC a Bayesian algorithm that models "good" and "bad" parameter regions separately to guide the search.
 
 # COMMAND ----------
 
@@ -539,11 +561,11 @@ for k, v in study.best_params.items():
 # MAGIC ---
 # MAGIC # Section 2: MLflow Experiment Tracking & Unity Catalog Model Registry
 # MAGIC
-# MAGIC MLflow is the backbone of MLOps on Databricks. In this section we:
+# MAGIC **MLflow** is Databricks' open-source platform for ML experiment tracking. It logs hyperparameters, metrics, and model artifacts so every experiment is reproducible and comparable. MLflow is the backbone of MLOps on Databricks. In this section we:
 # MAGIC
 # MAGIC 1. Log a **production-quality run** with all metrics, params, and artifacts
 # MAGIC 2. Register the model in **Unity Catalog** (not the legacy Workspace registry)
-# MAGIC 3. Manage model **versions and aliases** (champion / challenger pattern)
+# MAGIC 3. Manage model **versions and aliases** (champion / challenger pattern). **Champion/Challenger pattern**: the champion is the current production model; challengers are new candidates tested in parallel. Only promote a challenger to champion when it demonstrably outperforms.
 # MAGIC
 
 # COMMAND ----------
@@ -572,6 +594,8 @@ with mlflow.start_run(run_name="xgboost_champion_candidate") as run:
     print(f"MLflow Run ID: {run_id}")
 
     # ── Log hyperparameters ──────────────────────────────────────
+    if "best_decoded" not in dir():
+        best_decoded = {"note": "hyperopt_skipped"}
     mlflow.log_params(best_decoded)
     mlflow.log_param("model_type", "XGBClassifier")
     mlflow.log_param("feature_count", len(feature_cols))
@@ -652,7 +676,7 @@ with mlflow.start_run(run_name="xgboost_champion_candidate") as run:
 # MAGIC %md
 # MAGIC ### 2.2 Register Model in Unity Catalog
 # MAGIC
-# MAGIC Unity Catalog Model Registry provides:
+# MAGIC The **Unity Catalog Model Registry** is the modern approach -- it centralizes model governance across all workspaces with the same permissions model as your data tables. (The older Workspace-level registry is deprecated.) Unity Catalog Model Registry provides:
 # MAGIC - **Centralized governance** across workspaces
 # MAGIC - **Lineage tracking** from data to model to endpoint
 # MAGIC - **Access control** via Unity Catalog permissions
@@ -808,10 +832,13 @@ endpoint_name = "servicenow-lead-scoring"
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC > **Note:** `AutoCaptureConfigInput` is deprecated. Use **AI Gateway inference tables** for production monitoring instead. Configure them via the Databricks UI under Serving > Endpoint > AI Gateway settings.
+
+# COMMAND ----------
+
 # ── Define the endpoint configuration ────────────────────────────
-# Note: Legacy AutoCaptureConfigInput (inference tables) is deprecated.
-# Use AI Gateway inference tables instead (configured via the UI or
-# AI Gateway APIs). We create the endpoint without auto_capture_config.
+# We create the endpoint without auto_capture_config (use AI Gateway instead).
 served_entities = [
     ServedEntityInput(
         entity_name=model_name,
@@ -1026,6 +1053,8 @@ except Exception as e:
 # MAGIC %md
 # MAGIC ### 4.1 Inference Tables
 # MAGIC
+# MAGIC **Inference Tables** are Delta tables automatically populated by serving endpoints -- every request/response is logged with timestamps and latency, giving you a complete audit trail.
+# MAGIC
 # MAGIC When you enable **Auto Capture** on a serving endpoint, Databricks automatically
 # MAGIC logs every request and response to a Delta table in Unity Catalog.
 # MAGIC
@@ -1193,8 +1222,9 @@ print(f"  Drift injected: total_activities (shifted +3), annual_revenue (scaled 
 # COMMAND ----------
 
 # ── Run drift detection on numeric features ──────────────────────
-# Using the Kolmogorov-Smirnov test (KS test) to compare distributions.
-# A p-value < 0.05 suggests statistically significant drift.
+# The Kolmogorov-Smirnov (KS) test compares two probability distributions.
+# A p-value below 0.05 means the distributions are statistically different
+# -- a signal that input data has drifted from what the model was trained on.
 
 drift_results = []
 
@@ -1253,8 +1283,7 @@ else:
 # MAGIC %md
 # MAGIC ### 4.4 Lakehouse Monitoring (Conceptual)
 # MAGIC
-# MAGIC Databricks **Lakehouse Monitoring** automates drift detection and data quality
-# MAGIC checks. You can create a monitor on any Delta table, including inference tables.
+# MAGIC **Lakehouse Monitoring** is Databricks' automated monitoring suite that continuously checks for data drift, profile changes, and model quality degradation. You can create a monitor on any Delta table, including inference tables.
 # MAGIC
 # MAGIC ```python
 # MAGIC # Example: Create a monitor on the inference table

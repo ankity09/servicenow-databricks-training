@@ -14,7 +14,7 @@
 # MAGIC currently relies on gut instinct and static rules — you will replace that with ML models trained
 # MAGIC on historical CRM data and augment the workflow with Generative AI.
 # MAGIC
-# MAGIC This notebook sets up the **Unity Catalog** environment and generates realistic Salesforce-style
+# MAGIC This notebook sets up the **Unity Catalog** environment (**Unity Catalog** is Databricks' centralized governance layer -- it manages access control, data lineage, and audit logging across all data assets) and generates realistic Salesforce-style
 # MAGIC GTM data that we will use throughout the remaining modules:
 # MAGIC
 # MAGIC | Table | Description | Approx Rows |
@@ -28,7 +28,7 @@
 # MAGIC | `gtm_lead_scores` | Composite lead scores + conversion label | 10,000 |
 # MAGIC | `gtm_knowledge_base` | Product docs, playbooks, competitive intel | 50 |
 # MAGIC
-# MAGIC **Compute:** Serverless (no cluster configuration required)
+# MAGIC **Compute:** Serverless (serverless compute auto-provisions and auto-scales infrastructure -- no cluster configuration needed)
 # MAGIC
 # MAGIC **Estimated Runtime:** ~3 minutes
 
@@ -36,6 +36,9 @@
 
 # MAGIC %md
 # MAGIC ## 0.1 — Configuration
+# MAGIC
+# MAGIC The `_config` notebook sets shared variables used across all modules: **catalog** name, **schema** name,
+# MAGIC API tokens, and your username. Running it first ensures every notebook operates in the same workspace context.
 
 # COMMAND ----------
 
@@ -44,7 +47,14 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 0.2 — Create Schema
+# MAGIC ## 0.2 — Create Your Training Schema
+# MAGIC
+# MAGIC Databricks organizes data in a **three-level namespace**: `catalog.schema.table`.
+# MAGIC - **Catalog** -- top-level container (like a database server)
+# MAGIC - **Schema** -- logical grouping within a catalog (like a database)
+# MAGIC - **Table** -- the actual data asset
+# MAGIC
+# MAGIC We create a dedicated schema for this training so all generated tables are isolated from production data.
 
 # COMMAND ----------
 
@@ -81,6 +91,10 @@ def random_dates(start, end, n):
 
 # MAGIC %md
 # MAGIC ## 0.4 — Reference Data
+# MAGIC
+# MAGIC Now we'll build the synthetic dataset. The order matters: **accounts** (companies) are the root entity,
+# MAGIC **contacts** belong to accounts, **opportunities** (deals) link to accounts, and **activities** (emails, calls, meetings)
+# MAGIC connect to contacts. This mirrors a real CRM like ServiceNow or Salesforce.
 
 # COMMAND ----------
 
@@ -148,6 +162,11 @@ PRODUCT_LINES = ["Platform Pro", "Data Analytics Suite", "AI Accelerator", "Clou
 
 # MAGIC %md
 # MAGIC ## 0.5 — Generate Accounts (2,000 rows)
+# MAGIC
+# MAGIC Accounts are the root entity in our data model -- every contact, opportunity, and activity traces back to one.
+# MAGIC Fields like `industry`, `employee_count`, and `account_tier` will become key ML features for predicting deal outcomes.
+# MAGIC
+# MAGIC All tables are saved in **Delta Lake** format (Delta Lake is an open-source storage format that adds reliability features like ACID transactions and time travel to data lakes).
 
 # COMMAND ----------
 
@@ -194,6 +213,9 @@ print(f"gtm_accounts: {n_accounts} rows written")
 
 # MAGIC %md
 # MAGIC ## 0.6 — Generate Contacts (10,000 rows)
+# MAGIC
+# MAGIC Each contact has a `lead_source` and `seniority_level` -- these become important ML features later.
+# MAGIC For example, a "Demo Request" from a "VP" converts at a much higher rate than an "Organic" visit from an "Individual Contributor."
 
 # COMMAND ----------
 
@@ -397,6 +419,8 @@ print(f"gtm_lead_scores: {n_leads} rows written (conversion rate: {conv_rate:.1%
 # MAGIC ## 0.12 — Generate Knowledge Base (50 documents)
 # MAGIC
 # MAGIC These documents will be used for **RAG (Retrieval-Augmented Generation)** in the afternoon session.
+# MAGIC RAG lets an AI agent answer questions using your company's own documents rather than relying solely on the LLM's training data.
+# MAGIC We generate 50 representative docs (product sheets, playbooks, competitive intel, FAQs) so the agent has realistic content to retrieve from.
 
 # COMMAND ----------
 
@@ -586,6 +610,8 @@ print(f"\n  Conversion rate: {spark.sql(f'SELECT AVG(converted) FROM {catalog}.{
 
 # MAGIC %md
 # MAGIC ## Cleanup (only run if you want to remove all training data)
+# MAGIC
+# MAGIC **Optional.** Only run the cell below to reset the workspace for a fresh run. It drops the entire training schema and all tables within it.
 
 # COMMAND ----------
 

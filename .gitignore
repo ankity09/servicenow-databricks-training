@@ -1,6 +1,10 @@
 # Instructor-only materials (not shared with trainees)
 instructor_guide/
 
+# Secrets
+.env
+.env.*
+
 # Python
 __pycache__/
 *.pyc

@@ -34,9 +34,19 @@
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Activate the training catalog and schema from our shared configuration.
+
+# COMMAND ----------
+
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"USE SCHEMA {schema}")
 print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Verify that the GTM data tables created in Notebook 00 are available. If any tables show "NOT FOUND", re-run Notebook 00 first.
 
 # COMMAND ----------
 
@@ -99,6 +109,10 @@ for t in tables:
 # MAGIC > **Key Insight:** Start simple. Move up the complexity ladder only when the simpler pattern can't solve your problem.
 # MAGIC > An agent that uses RAG + SQL tools covers 80% of enterprise use cases.
 # MAGIC
+# MAGIC > **Glossary:**
+# MAGIC > - **RAG (Retrieval-Augmented Generation)** -- Instead of fine-tuning an LLM on your data (expensive, requires retraining), you retrieve relevant documents at query time and include them in the prompt. The model stays generic but answers become grounded in your specific data.
+# MAGIC > - **Tool calling** (also called function calling) lets the LLM decide which external functions to invoke -- querying a database, searching documents, or calling an API -- rather than generating answers from memory alone.
+# MAGIC
 # MAGIC ---
 
 # COMMAND ----------
@@ -106,9 +120,10 @@ for t in tables:
 # MAGIC %md
 # MAGIC # Section 2: Foundation Models & Prompt Engineering
 # MAGIC
-# MAGIC Databricks provides a **Foundation Model API** — a unified, OpenAI-compatible interface for
+# MAGIC Databricks provides a **Foundation Model API** -- a unified, OpenAI-compatible interface for
 # MAGIC accessing LLMs. This means you can use the familiar OpenAI SDK to call models hosted on Databricks,
-# MAGIC with no data leaving your environment.
+# MAGIC with no data leaving your environment. An **endpoint** is a hosted instance of a model that you
+# MAGIC call via API -- Databricks manages the infrastructure so you don't have to.
 # MAGIC
 # MAGIC ### Available Models in This Workshop
 # MAGIC | Model | Endpoint | Use Case |
@@ -127,6 +142,13 @@ for t in tables:
 # COMMAND ----------
 
 # MAGIC %pip install openai databricks-sdk --quiet
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC #### Environment Fix -- typing_extensions
+# MAGIC On Databricks serverless compute, the pre-installed `typing_extensions` version can conflict with the OpenAI SDK.
+# MAGIC The cell below installs a compatible version to a temporary path. This is a known workaround -- not a bug in your code.
 
 # COMMAND ----------
 
@@ -180,7 +202,7 @@ print(response.choices[0].message.content)
 
 # MAGIC %md
 # MAGIC #### Technique 1: Zero-Shot Classification
-# MAGIC The model classifies without any examples — relying entirely on its training knowledge.
+# MAGIC (Zero-shot = no examples provided; the model relies entirely on its training knowledge.)
 
 # COMMAND ----------
 
@@ -218,6 +240,7 @@ print(response.choices[0].message.content)
 
 # MAGIC %md
 # MAGIC #### Technique 2: Few-Shot Extraction
+# MAGIC (Few-shot = a handful of input/output examples teach the model the desired format.)
 # MAGIC Providing examples teaches the model your exact desired output format.
 
 # COMMAND ----------
@@ -420,6 +443,11 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Let's examine the knowledge base table we generated in Notebook 00. These documents -- product playbooks, competitive intel, best practices -- will power our RAG (Retrieval-Augmented Generation) system.
+
+# COMMAND ----------
+
 # Let's look at our GTM knowledge base — this is what we'll make searchable via RAG
 knowledge_df = spark.sql(f"SELECT * FROM {catalog}.{schema}.gtm_knowledge_base")
 print(f"Total documents: {knowledge_df.count()}")
@@ -477,7 +505,8 @@ print(f"Change Data Feed enabled on {catalog}.{schema}.gtm_knowledge_base")
 # MAGIC Databricks **AI Functions** let you call AI models directly from SQL. We'll use `ai_query()` to
 # MAGIC generate embeddings for every document in our knowledge base using the `databricks-gte-large-en` model.
 # MAGIC
-# MAGIC This creates a new table with an `embedding` column — a dense vector representation of each document's content.
+# MAGIC This creates a new table with an `embedding` column -- a dense vector representation of each document's content.
+# MAGIC **Embeddings** are numerical representations (lists of numbers) that capture semantic meaning. Similar texts produce similar vectors, enabling search by meaning rather than keywords.
 
 # COMMAND ----------
 
@@ -510,7 +539,7 @@ display(embeddings_df)
 # MAGIC %md
 # MAGIC ### 3.4 — Create a Vector Search Index
 # MAGIC
-# MAGIC Now we'll create a **Delta Sync Vector Search Index**. This index:
+# MAGIC Now we'll create a **Delta Sync Vector Search Index**. (Delta Sync automatically keeps the vector index in sync whenever the source Delta table changes -- no manual rebuilds needed.) This index:
 # MAGIC - Automatically syncs when the source Delta table changes
 # MAGIC - Supports filtered similarity search
 # MAGIC - Is governed by Unity Catalog ACLs
@@ -530,6 +559,11 @@ source_table = f"{catalog}.{schema}.gtm_knowledge_base"
 print(f"Vector Search Endpoint: {vs_endpoint_name}")
 print(f"Index Name:             {vs_index_name}")
 print(f"Source Table:           {source_table}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Check that the Vector Search endpoint is provisioned and ready to serve queries.
 
 # COMMAND ----------
 
@@ -672,6 +706,8 @@ except Exception as e:
 
 # MAGIC %md
 # MAGIC ---
+# MAGIC Having built the retrieval infrastructure, let's now create the reusable tools an agent will invoke at runtime.
+# MAGIC
 # MAGIC # Section 4: Equipping Agents with Tools
 # MAGIC
 # MAGIC An agent is only as useful as the tools it can access. We'll build three tools that cover the
@@ -852,7 +888,7 @@ def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
                 ROUND(SUM(amount), 0) as total_amount,
                 ROUND(AVG(amount), 0) as avg_deal_size,
                 ROUND(AVG(probability), 1) as avg_probability,
-                ROUND(SUM(amount * probability / 100), 0) as weighted_pipeline
+                ROUND(SUM(amount * probability / 100), 0) as weighted_pipeline  -- Weighted Pipeline = Deal Amount x Probability — realistic expected revenue
             FROM {catalog}.{schema}.gtm_opportunities
             {stage_filter}
             GROUP BY stage
@@ -987,8 +1023,9 @@ print(response.choices[0].message.content)
 # MAGIC
 # MAGIC ## 5.1 — Agent Bricks: Pre-Built Agent Components
 # MAGIC
-# MAGIC **Agent Bricks** are pre-built, production-ready agent capabilities that Databricks provides out of the box.
-# MAGIC Instead of building every agent capability from scratch, you can compose agents from these building blocks:
+# MAGIC **Agent Bricks** are pre-built, production-ready agent components -- think of them as LEGO bricks you snap
+# MAGIC together to build complex AI workflows without starting from scratch. Databricks provides these out of the box,
+# MAGIC so instead of building every agent capability yourself, you compose agents from these building blocks:
 # MAGIC
 # MAGIC ```
 # MAGIC  ┌─────────────────────────────────────────────────────────────────────┐

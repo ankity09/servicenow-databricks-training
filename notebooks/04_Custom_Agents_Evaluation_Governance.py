@@ -22,6 +22,8 @@
 # MAGIC | 6 | Agent Evaluation (LLM-as-Judge) | Automated quality testing |
 # MAGIC | 7 | Wrap-Up & Next Steps | Certification, resources |
 # MAGIC
+# MAGIC > **ResponsesAgent** is MLflow's standard interface for packaging GenAI agents -- it handles input/output formatting, tool dispatch, and model versioning.
+# MAGIC
 # MAGIC **Estimated Duration:** 75 minutes
 # MAGIC
 # MAGIC ---
@@ -37,6 +39,11 @@
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Activate the training catalog and schema from our shared configuration.
+
+# COMMAND ----------
+
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"USE SCHEMA {schema}")
 print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
@@ -49,6 +56,13 @@ print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 # COMMAND ----------
 
 # MAGIC %pip install mlflow openai databricks-sdk --quiet
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC #### Environment Fix -- typing_extensions
+# MAGIC On Databricks serverless compute, the pre-installed `typing_extensions` version can conflict with the OpenAI SDK.
+# MAGIC The cell below installs a compatible version. This is a known workaround -- not a bug in your code.
 
 # COMMAND ----------
 
@@ -89,6 +103,11 @@ print("typing_extensions fix verified successfully")
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC After the library install (which restarts the Python process), reload configuration.
+
+# COMMAND ----------
+
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"USE SCHEMA {schema}")
 
@@ -105,6 +124,13 @@ spark.sql(f"USE SCHEMA {schema}")
 from databricks.sdk import WorkspaceClient
 from openai import OpenAI
 import json
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Initialize the OpenAI-compatible client (pointed at Databricks' Foundation Model API) and the Vector Search index created in Notebook 03.
+
+# COMMAND ----------
 
 w = WorkspaceClient()
 
@@ -299,6 +325,11 @@ def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Validate that all three tools return expected results before wiring them into the agent.
+
+# COMMAND ----------
+
 # Quick validation that tools work
 print("Validating tools...")
 print(f"  query_accounts:        {len(query_accounts(limit=1))} chars returned")
@@ -314,7 +345,9 @@ print("\nAll tools operational.")
 # MAGIC
 # MAGIC An **agent** is an LLM that can autonomously decide which tools to call, interpret the results,
 # MAGIC and formulate a response. The key difference from a simple prompt chain is that the agent
-# MAGIC decides the execution flow at runtime — it is not hardcoded.
+# MAGIC decides the execution flow at runtime -- it is not hardcoded.
+# MAGIC
+# MAGIC > **Tool calling** (also called function calling) allows the LLM to request data from external sources -- databases, APIs, search indexes -- rather than generating answers from memory alone. The LLM sees a schema describing each tool's parameters and decides which tools to invoke.
 # MAGIC
 # MAGIC ### Agent Loop Architecture
 # MAGIC ```
@@ -441,6 +474,11 @@ for t in tools:
 # MAGIC The agent loop is the core orchestration logic. It sends the user message to the LLM,
 # MAGIC checks if the LLM wants to call tools, executes them, feeds results back, and repeats
 # MAGIC until the LLM produces a final text response.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Map tool names to their Python functions. The agent loop uses this dictionary to dispatch the correct function when the LLM requests a tool call.
 
 # COMMAND ----------
 
@@ -810,6 +848,13 @@ print("This model wraps our agent loop, tool definitions, and system prompt into
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC #### Code-Based Logging
+# MAGIC Instead of serializing (pickling) the agent object, we write the Python source code to a file and log it with MLflow.
+# MAGIC This is the recommended approach for LLM agents -- it is more reproducible, easier to debug, and avoids serialization issues with API clients.
+
+# COMMAND ----------
+
 # Write the agent class to a standalone Python file for code-based MLflow logging
 import os, textwrap
 
@@ -908,6 +953,11 @@ print(f"Agent code saved to: {agent_code_path}")
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Create a dedicated MLflow experiment for this agent. The path follows the convention `/Users/{username}/experiment_name`.
+
+# COMMAND ----------
+
 # Set the MLflow experiment
 experiment_name = f"/Users/{username}/gtm_assistant_agent"
 mlflow.set_experiment(experiment_name)
@@ -987,6 +1037,8 @@ except Exception as e:
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 3: Deploying with Databricks Apps (Conceptual)
+# MAGIC
+# MAGIC > **Note:** This section is a conceptual overview -- no executable code. It shows how you would deploy the agent we just built as a production Databricks App.
 # MAGIC
 # MAGIC **Databricks Apps** provide full-stack application hosting directly on the Databricks platform.
 # MAGIC You can build and deploy web applications — with a backend API and a rich frontend UI — that
@@ -1107,8 +1159,10 @@ except Exception as e:
 # MAGIC # Section 4: AI Gateway & Governance
 # MAGIC
 # MAGIC As organizations scale GenAI, **governance** becomes critical. Databricks AI Gateway provides
-# MAGIC a unified control plane for all LLM interactions — whether internal (Databricks-hosted) or
+# MAGIC a unified control plane for all LLM interactions -- whether internal (Databricks-hosted) or
 # MAGIC external (OpenAI, Anthropic, etc.).
+# MAGIC
+# MAGIC > **AI Gateway** is a centralized control layer that sits between your application and LLM endpoints. It enforces safety guardrails, rate limits, cost tracking, and audit logging -- all without changing your application code.
 # MAGIC
 # MAGIC ### AI Gateway Architecture
 # MAGIC ```
@@ -1194,10 +1248,12 @@ except Exception as e:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4.1 — Simple Guardrails Example
+# MAGIC ### 4.1 -- Simple Guardrails Example
 # MAGIC
 # MAGIC Let's demonstrate a basic content safety pattern. In production, these guardrails are
 # MAGIC configured at the AI Gateway level. Here we show the concept with a wrapper function.
+# MAGIC
+# MAGIC > **Note:** This example demonstrates the concept with simple pattern matching. In production, configure guardrails at the **AI Gateway level** where they are enforced server-side and cannot be bypassed by application code.
 
 # COMMAND ----------
 
@@ -1261,6 +1317,8 @@ print(result)
 # MAGIC - The full chain of execution (parent-child spans)
 # MAGIC
 # MAGIC This is essential for debugging agent behavior and understanding why an agent gave a particular answer.
+# MAGIC
+# MAGIC > **MLflow Tracing** records a hierarchical trace of every operation in an agent run -- LLM calls, tool invocations, and their results form connected **spans** in a tree. This is essential for debugging why an agent gave a particular answer.
 
 # COMMAND ----------
 
@@ -1329,7 +1387,7 @@ except Exception as e:
 # MAGIC
 # MAGIC Before deploying an agent to production, you need to systematically evaluate its quality.
 # MAGIC **LLM-as-Judge** is a technique where a separate LLM evaluates the agent's outputs against
-# MAGIC ground truth answers and quality criteria.
+# MAGIC ground truth answers and quality criteria. It uses a separate, powerful LLM to evaluate agent outputs against quality criteria (faithfulness, relevance, safety), scaling evaluation beyond what manual human review can cover.
 # MAGIC
 # MAGIC Databricks provides this natively through `mlflow.evaluate()` with the `"databricks-agent"` model type.
 # MAGIC
@@ -1340,6 +1398,8 @@ except Exception as e:
 # MAGIC | **Relevance** | Does the answer address the user's question? | Ensures usefulness |
 # MAGIC | **Groundedness** | Are claims traceable to source documents? | Builds trust |
 # MAGIC | **Safety** | Is the output free from harmful content? | Compliance |
+# MAGIC
+# MAGIC > **Faithfulness** -- the answer is supported by the retrieved documents (no hallucination). **Groundedness** -- every claim is traceable to a specific source.
 
 # COMMAND ----------
 

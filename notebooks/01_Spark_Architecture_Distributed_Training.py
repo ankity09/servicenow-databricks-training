@@ -21,7 +21,7 @@
 # MAGIC ## Prerequisites
 # MAGIC
 # MAGIC - Run **Module 0** first to create the `servicenow_training` schema and all GTM tables
-# MAGIC - Compute: Serverless (no cluster configuration needed)
+# MAGIC - Compute: Serverless (no cluster configuration needed). Serverless compute is fully managed by Databricks -- it auto-scales, requires no cluster configuration, and you pay only for what you use.
 # MAGIC
 # MAGIC **Estimated Runtime:** ~15 minutes
 
@@ -33,6 +33,11 @@
 # COMMAND ----------
 
 # MAGIC %run ./_config
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Activate the training catalog and schema established in Notebook 00.
 
 # COMMAND ----------
 
@@ -52,7 +57,7 @@ print(f"Active catalog/schema: {catalog}.{schema}")
 # MAGIC
 # MAGIC | Component | Role |
 # MAGIC |-----------|------|
-# MAGIC | **Driver** | Coordinates the job. Parses your code, builds a logical plan, optimizes it (Catalyst), and schedules tasks. |
+# MAGIC | **Driver** | Coordinates the job. Parses your code, builds a logical plan, optimizes it via Catalyst (Spark's built-in query optimizer that rewrites and optimizes your SQL/DataFrame operations before execution), and schedules tasks. |
 # MAGIC | **Workers (Executors)** | Execute tasks in parallel. Each executor runs on a separate machine and processes a subset of the data. |
 # MAGIC | **Partitions** | The unit of parallelism. A DataFrame is split into partitions, and each task processes one partition. |
 # MAGIC | **Shuffle** | Redistribution of data across executors — required for joins, aggregations, and sorts. Shuffles are expensive (disk + network I/O). |
@@ -68,7 +73,8 @@ print(f"Active catalog/schema: {catalog}.{schema}")
 # MAGIC %md
 # MAGIC ## 1.2 — Load Data from Unity Catalog
 # MAGIC
-# MAGIC Let's start by loading the tables we created in Module 0.
+# MAGIC **Unity Catalog** (Databricks' centralized governance layer for access control and data lineage)
+# MAGIC stores every table, model, and function we'll use. Let's start by loading the tables we created in Module 0.
 
 # COMMAND ----------
 
@@ -99,6 +105,11 @@ print(f"  accounts        : {df_accounts.count():>10,} rows")
 # MAGIC - **Contact attributes:** seniority level, lead source, department
 # MAGIC - **Lead scores:** engagement, fit, behavior, recency scores
 # MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Import PySpark SQL functions for distributed aggregations and window operations.
 
 # COMMAND ----------
 
@@ -220,6 +231,8 @@ df_features.printSchema()
 # MAGIC | **pandas** | Single node (driver CPU) | Datasets < ~10 GB, fast iteration | Memory-bound, no parallelism |
 # MAGIC | **Spark DataFrames** | Distributed (workers) | Datasets 10 GB – PB scale | Processes data where it lives |
 # MAGIC | **Spark + Photon** | Distributed + C++ vectorized | Large analytical queries, joins, aggs | Classic clusters only (not serverless) |
+# MAGIC
+# MAGIC **Photon** is Databricks' C++ vectorized query engine that accelerates Spark SQL workloads -- available on classic clusters.
 # MAGIC
 # MAGIC To see this in action, we'll **scale up** our activity and campaign data to simulate a realistic
 # MAGIC enterprise CRM workload — millions of engagement records across your customer base — and run the
@@ -510,6 +523,7 @@ spark.sql(f"DROP TABLE IF EXISTS {catalog}.{schema}._tmp_partition_demo_4")
 # MAGIC
 # MAGIC On **serverless compute**, the classic JVM-based `pyspark.ml` APIs (StringIndexer, VectorAssembler,
 # MAGIC LogisticRegression, etc.) are **not available** because custom JVM code is restricted.
+# MAGIC (Serverless enforces multi-tenant isolation and restricts custom JVM bytecode execution for security.)
 # MAGIC
 # MAGIC Instead, we use a powerful and practical pattern:
 # MAGIC
@@ -825,9 +839,11 @@ print(classification_report(y_test, y_pred_gbt, target_names=["Not Converted", "
 # MAGIC %md
 # MAGIC ## 3.3 — Pandas UDFs for Distributed Inference
 # MAGIC
-# MAGIC **Pandas UDFs** (also called Vectorized UDFs) let you apply a Python function to each
-# MAGIC **partition** of a Spark DataFrame. The data arrives as a pandas Series or DataFrame,
-# MAGIC and you return a pandas Series. Spark handles the distribution automatically.
+# MAGIC **Pandas UDFs** (also called Vectorized UDFs) batch rows into pandas DataFrames for efficient
+# MAGIC Python processing. `mapInPandas` is a related API for partition-level transforms.
+# MAGIC These UDFs let you apply a Python function to each **partition** of a Spark DataFrame.
+# MAGIC The data arrives as a pandas Series or DataFrame, and you return a pandas Series.
+# MAGIC Spark handles the distribution automatically.
 # MAGIC
 # MAGIC This is the **best pattern for distributed inference** with scikit-learn models:
 # MAGIC 1. Train a model on the driver (as above)
@@ -842,8 +858,9 @@ from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import DoubleType
 import pickle
 
-# On serverless compute, spark.sparkContext.broadcast() is not available.
-# Instead, we serialize the model with pickle and let Spark distribute it via closure serialization.
+# On serverless compute, spark.sparkContext.broadcast() is unavailable because it requires a
+# persistent JVM context that serverless does not expose. Instead, we use closure serialization:
+# Spark automatically distributes the pickled model to workers when the UDF is called.
 # This works well for small models (< a few hundred MB).
 
 model_bytes = pickle.dumps(gbt)
@@ -966,8 +983,12 @@ spark.sql("""
 # MAGIC
 # MAGIC ## 4.1 — `pyspark.ml.connect` — Spark ML via Databricks Connect
 # MAGIC
+# MAGIC **Spark Connect** is a client-server protocol that lets you run Spark code remotely.
+# MAGIC **Databricks Connect** is Databricks' implementation -- it lets you develop in your local IDE
+# MAGIC (VS Code, PyCharm) while executing on a Databricks cluster.
+# MAGIC
 # MAGIC Starting with **DBR 15.0+**, the `pyspark.ml.connect` module allows you to run Spark ML
-# MAGIC pipelines from your **local IDE** (VS Code, PyCharm) while the computation executes on
+# MAGIC pipelines from your **local IDE** while the computation executes on
 # MAGIC a remote Databricks cluster via Spark Connect.
 # MAGIC
 # MAGIC This is a game-changer for ML teams who want to:
