@@ -1,5 +1,5 @@
 # Databricks notebook source
-
+# DBTITLE 1,Module 1: Spark Architecture and Distributed Training
 # MAGIC %md
 # MAGIC # Module 1: Spark Architecture & Distributed Training
 # MAGIC
@@ -27,26 +27,31 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Configuration
 # MAGIC %md
 # MAGIC ## Configuration
 
 # COMMAND ----------
 
+# DBTITLE 1,Run Config File
 # MAGIC %run ./_config
 
 # COMMAND ----------
 
+# DBTITLE 1,Activate Training Catalog and Schema
 # MAGIC %md
 # MAGIC Activate the training catalog and schema established in Notebook 00.
 
 # COMMAND ----------
 
+# DBTITLE 1,Set Active Catalog and Schema
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"USE SCHEMA {schema}")
 print(f"Active catalog/schema: {catalog}.{schema}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 1: How Spark Distributes Work
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 1: Spark Architecture for ML
@@ -70,6 +75,7 @@ print(f"Active catalog/schema: {catalog}.{schema}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Load Data from Unity Catalog
 # MAGIC %md
 # MAGIC ## 1.2 — Load Data from Unity Catalog
 # MAGIC
@@ -78,6 +84,7 @@ print(f"Active catalog/schema: {catalog}.{schema}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Load GTM Tables from Unity Catalog
 df_lead_scores = spark.table(f"{catalog}.{schema}.gtm_lead_scores")
 df_contacts    = spark.table(f"{catalog}.{schema}.gtm_contacts")
 df_activities  = spark.table(f"{catalog}.{schema}.gtm_activities")
@@ -93,6 +100,7 @@ print(f"  accounts        : {df_accounts.count():>10,} rows")
 
 # COMMAND ----------
 
+# DBTITLE 1,Build a Rich Feature Table
 # MAGIC %md
 # MAGIC ## 1.3 — Build a Rich Feature Table
 # MAGIC
@@ -108,11 +116,13 @@ print(f"  accounts        : {df_accounts.count():>10,} rows")
 
 # COMMAND ----------
 
+# DBTITLE 1,Import PySpark SQL Functions
 # MAGIC %md
 # MAGIC Import PySpark SQL functions for distributed aggregations and window operations.
 
 # COMMAND ----------
 
+# DBTITLE 1,Step 1: Aggregate Activities per Contact
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
@@ -139,6 +149,7 @@ df_activity_agg.show(5, truncate=False)
 
 # COMMAND ----------
 
+# DBTITLE 1,Step 2: Aggregate Campaign Engagement
 # --- Step 2: Aggregate campaign engagement per contact ---
 df_campaign_agg = (
     df_campaigns
@@ -158,6 +169,7 @@ df_campaign_agg.show(5, truncate=False)
 
 # COMMAND ----------
 
+# DBTITLE 1,Step 3: Join into Feature Table
 # --- Step 3: Join everything into a single feature table ---
 
 # Start with lead scores (one row per contact — this is our label table)
@@ -220,6 +232,7 @@ df_features.printSchema()
 
 # COMMAND ----------
 
+# DBTITLE 1,Pandas vs Spark vs Photon Comparison
 # MAGIC %md
 # MAGIC ## 1.3.1 — Pandas vs Spark vs Photon: Why Distributed Processing Matters
 # MAGIC
@@ -240,6 +253,7 @@ df_features.printSchema()
 
 # COMMAND ----------
 
+# DBTITLE 1,Benchmark Setup: Scale to Enterprise Volume
 import time
 
 # === BENCHMARK SETUP: Scale data to enterprise volume ===
@@ -274,6 +288,7 @@ print(f"\nRunning identical feature engineering in pandas vs Spark...")
 
 # COMMAND ----------
 
+# DBTITLE 1,Benchmark: Pandas Single-Node Processing
 # === PANDAS: Collect everything to the driver, process single-threaded ===
 
 pandas_start = time.time()
@@ -344,6 +359,7 @@ del _pd_ls, _pd_ct, _pd_act, _pd_camp, _pd_acc, _pd_act_agg, _pd_camp_agg, _pd_f
 
 # COMMAND ----------
 
+# DBTITLE 1,Benchmark: Spark Distributed Processing
 # === SPARK: Distributed processing across workers ===
 # Same pipeline, but Spark partitions the work across the cluster.
 
@@ -404,6 +420,7 @@ del _bench_activities, _bench_campaigns
 
 # COMMAND ----------
 
+# DBTITLE 1,Benchmark Results Interpretation
 # MAGIC %md
 # MAGIC ### Results Interpretation
 # MAGIC
@@ -436,6 +453,7 @@ del _bench_activities, _bench_campaigns
 
 # COMMAND ----------
 
+# DBTITLE 1,Print Benchmark Comparison
 # Print the measured comparison
 speedup = pandas_elapsed / spark_elapsed if spark_elapsed > 0 else float("inf")
 
@@ -458,6 +476,7 @@ print(f"  for SQL/DataFrame operations via C++ vectorized execution.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Inspect the Execution Plan
 # MAGIC %md
 # MAGIC ## 1.4 — Inspect the Execution Plan
 # MAGIC
@@ -472,11 +491,13 @@ print(f"  for SQL/DataFrame operations via C++ vectorized execution.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Show Full Execution Plan
 # Show the full execution plan for our feature table
 df_features.explain(True)
 
 # COMMAND ----------
 
+# DBTITLE 1,Partitions and Parallelism
 # MAGIC %md
 # MAGIC ## 1.5 — Partitions and Parallelism
 # MAGIC
@@ -487,6 +508,7 @@ df_features.explain(True)
 
 # COMMAND ----------
 
+# DBTITLE 1,Demo: Repartition and Coalesce
 # On serverless compute, .rdd operations are not supported.
 # Instead, we can write the DataFrame to a temp table and inspect partition count via DESCRIBE DETAIL,
 # or simply demonstrate repartition/coalesce concepts without .rdd.getNumPartitions().
@@ -515,6 +537,7 @@ spark.sql(f"DROP TABLE IF EXISTS {catalog}.{schema}._tmp_partition_demo_4")
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 2: ML on Serverless with scikit-learn
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 2: Training ML Models on Serverless Compute
@@ -540,6 +563,7 @@ spark.sql(f"DROP TABLE IF EXISTS {catalog}.{schema}._tmp_partition_demo_4")
 
 # COMMAND ----------
 
+# DBTITLE 1,Import scikit-learn Libraries
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder, StandardScaler
@@ -552,6 +576,7 @@ print("scikit-learn imports loaded successfully (serverless-compatible).")
 
 # COMMAND ----------
 
+# DBTITLE 1,Prepare Data for scikit-learn
 # MAGIC %md
 # MAGIC ## 2.2 — Prepare Data for scikit-learn
 # MAGIC
@@ -562,6 +587,7 @@ print("scikit-learn imports loaded successfully (serverless-compatible).")
 
 # COMMAND ----------
 
+# DBTITLE 1,Encode Categorical Columns
 categorical_cols = ["seniority_level", "lead_source", "industry", "account_tier"]
 
 # Convert to pandas for scikit-learn training
@@ -579,6 +605,7 @@ print("Encoded columns:", [f"{c}_idx" for c in categorical_cols])
 
 # COMMAND ----------
 
+# DBTITLE 1,Assemble Feature Matrix
 # MAGIC %md
 # MAGIC ## 2.3 — Assemble Feature Matrix
 # MAGIC
@@ -587,6 +614,7 @@ print("Encoded columns:", [f"{c}_idx" for c in categorical_cols])
 
 # COMMAND ----------
 
+# DBTITLE 1,Define Feature Columns
 numeric_cols = [
     "engagement_score", "fit_score", "behavior_score", "recency_score",
     "total_activities", "avg_sentiment", "positive_outcomes", "negative_outcomes",
@@ -607,6 +635,7 @@ for i, col in enumerate(all_feature_cols, 1):
 
 # COMMAND ----------
 
+# DBTITLE 1,Train/Test Split
 # MAGIC %md
 # MAGIC ## 2.4 — Train/Test Split
 # MAGIC
@@ -614,6 +643,7 @@ for i, col in enumerate(all_feature_cols, 1):
 
 # COMMAND ----------
 
+# DBTITLE 1,Stratified Train/Test Split and Scaling
 # Keep a Spark DataFrame version with label for later use (Pandas UDF section)
 df_ml = df_features.withColumn("label", F.col("converted").cast("double"))
 
@@ -642,6 +672,7 @@ for label, count in zip(unique, counts):
 
 # COMMAND ----------
 
+# DBTITLE 1,Train Logistic Regression
 # MAGIC %md
 # MAGIC ## 2.5 — Train Logistic Regression
 # MAGIC
@@ -650,6 +681,7 @@ for label, count in zip(unique, counts):
 
 # COMMAND ----------
 
+# DBTITLE 1,Train Logistic Regression Model
 lr = LogisticRegression(
     max_iter=100,
     C=100.0,          # Inverse of regParam (1/0.01)
@@ -665,6 +697,7 @@ print("Training complete.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Train Random Forest
 # MAGIC %md
 # MAGIC ## 2.6 — Train Random Forest
 # MAGIC
@@ -673,6 +706,7 @@ print("Training complete.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Train Random Forest Model
 rf = RandomForestClassifier(
     n_estimators=100,
     max_depth=10,
@@ -686,6 +720,7 @@ print("Training complete.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Evaluate Both Models
 # MAGIC %md
 # MAGIC ## 2.7 — Evaluate Both Models
 # MAGIC
@@ -696,6 +731,7 @@ print("Training complete.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Compute AUC, Accuracy, and F1 Scores
 results = {}
 
 for name, model in [("Logistic Regression", lr), ("Random Forest", rf)]:
@@ -717,6 +753,42 @@ for name, model in [("Logistic Regression", lr), ("Random Forest", rf)]:
 
 # COMMAND ----------
 
+# DBTITLE 1,ROC Curve: Logistic Regression vs Random Forest
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, roc_auc_score
+
+fig, ax = plt.subplots(figsize=(8, 7))
+
+# Plot ROC curve for each model
+colors = {"Logistic Regression": "#4A90D9", "Random Forest": "#E55934"}
+
+for name, model, ls in [("Logistic Regression", lr, "-"), ("Random Forest", rf, "--")]:
+    y_prob = model.predict_proba(X_test)[:, 1]
+    fpr, tpr, _ = roc_curve(y_test, y_prob)
+    auc = roc_auc_score(y_test, y_prob)
+    ax.plot(fpr, tpr, color=colors[name], linewidth=2.5, linestyle=ls,
+            label=f"{name} (AUC = {auc:.4f})")
+
+# Diagonal reference line (random classifier)
+ax.plot([0, 1], [0, 1], color="gray", linestyle=":", linewidth=1.5, label="Random (AUC = 0.5)")
+
+ax.set_xlabel("False Positive Rate", fontsize=12)
+ax.set_ylabel("True Positive Rate", fontsize=12)
+ax.set_title("ROC Curve — Model Comparison", fontsize=14, fontweight="bold", pad=12)
+ax.legend(loc="lower right", fontsize=11, framealpha=0.9)
+ax.set_xlim([0, 1])
+ax.set_ylim([0, 1.02])
+ax.set_aspect("equal")
+ax.grid(True, alpha=0.3)
+fig.tight_layout()
+plt.show()
+
+print("\nInterpretation: A curve closer to the top-left corner indicates better")
+print("discriminative power. The model with the higher AUC is the stronger ranker.")
+
+# COMMAND ----------
+
+# DBTITLE 1,Feature Importance (Random Forest)
 # MAGIC %md
 # MAGIC ## 2.8 — Feature Importance (Random Forest)
 # MAGIC
@@ -727,6 +799,7 @@ for name, model in [("Logistic Regression", lr), ("Random Forest", rf)]:
 
 # COMMAND ----------
 
+# DBTITLE 1,Extract and Display Feature Importances
 # Extract feature importances from the trained Random Forest
 importances = rf.feature_importances_
 
@@ -745,6 +818,7 @@ for rank, (_, row) in enumerate(importance_df.head(15).iterrows(), 1):
 
 # COMMAND ----------
 
+# DBTITLE 1,View Predictions
 # MAGIC %md
 # MAGIC ## 2.9 — View Predictions
 # MAGIC
@@ -752,6 +826,7 @@ for rank, (_, row) in enumerate(importance_df.head(15).iterrows(), 1):
 
 # COMMAND ----------
 
+# DBTITLE 1,Sample Predictions from Random Forest
 y_pred_rf = rf.predict(X_test)
 y_prob_rf = rf.predict_proba(X_test)[:, 1]
 
@@ -768,6 +843,7 @@ spark.createDataFrame(predictions_pdf).show(10, truncate=False)
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 3: Pandas API on Spark and UDFs
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 3: Pandas API on Spark & Pandas UDFs
@@ -787,6 +863,7 @@ spark.createDataFrame(predictions_pdf).show(10, truncate=False)
 
 # COMMAND ----------
 
+# DBTITLE 1,Convert to Pandas-on-Spark DataFrame
 import pyspark.pandas as ps
 
 # Convert our Spark DataFrame to a pandas-on-Spark DataFrame
@@ -798,6 +875,7 @@ psdf.head()
 
 # COMMAND ----------
 
+# DBTITLE 1,Train with scikit-learn on Pandas-on-Spark
 # MAGIC %md
 # MAGIC ## 3.2 — Train with scikit-learn on Pandas-on-Spark
 # MAGIC
@@ -807,6 +885,7 @@ psdf.head()
 
 # COMMAND ----------
 
+# DBTITLE 1,Train Gradient Boosting Classifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import classification_report
 
@@ -836,6 +915,7 @@ print(classification_report(y_test, y_pred_gbt, target_names=["Not Converted", "
 
 # COMMAND ----------
 
+# DBTITLE 1,Pandas UDFs for Distributed Inference
 # MAGIC %md
 # MAGIC ## 3.3 — Pandas UDFs for Distributed Inference
 # MAGIC
@@ -853,6 +933,7 @@ print(classification_report(y_test, y_pred_gbt, target_names=["Not Converted", "
 
 # COMMAND ----------
 
+# DBTITLE 1,Serialize Model and Scaler for UDF
 import pandas as pd
 from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import DoubleType
@@ -869,6 +950,7 @@ feature_cols_list = list(sklearn_feature_cols)  # plain Python list for closure 
 
 # COMMAND ----------
 
+# DBTITLE 1,Define the Pandas UDF
 # MAGIC %md
 # MAGIC ### Define the Pandas UDF
 # MAGIC
@@ -877,6 +959,7 @@ feature_cols_list = list(sklearn_feature_cols)  # plain Python list for closure 
 
 # COMMAND ----------
 
+# DBTITLE 1,Define Prediction Pandas UDF
 @pandas_udf(DoubleType())
 def predict_conversion_probability(*cols: pd.Series) -> pd.Series:
     """
@@ -901,6 +984,7 @@ def predict_conversion_probability(*cols: pd.Series) -> pd.Series:
 
 # COMMAND ----------
 
+# DBTITLE 1,Apply UDF to Full DataFrame
 # MAGIC %md
 # MAGIC ### Apply the UDF to the Full DataFrame
 # MAGIC
@@ -909,6 +993,7 @@ def predict_conversion_probability(*cols: pd.Series) -> pd.Series:
 
 # COMMAND ----------
 
+# DBTITLE 1,Distributed Scoring with Pandas UDF
 # We need to encode categoricals in Spark SQL before passing to the UDF.
 # On serverless, pyspark.ml.feature.StringIndexer is not available, so we
 # use a pure Spark SQL approach: map each category to its LabelEncoder index
@@ -945,6 +1030,7 @@ print("Distributed inference complete. Sample predictions:")
 
 # COMMAND ----------
 
+# DBTITLE 1,Verify Predictions at Scale
 # MAGIC %md
 # MAGIC ### Verify Predictions at Scale
 # MAGIC
@@ -952,6 +1038,7 @@ print("Distributed inference complete. Sample predictions:")
 
 # COMMAND ----------
 
+# DBTITLE 1,Bucket Predictions vs Actual Conversion
 # Distribution of predicted probabilities
 df_scored.select("conversion_probability").describe().show()
 
@@ -977,6 +1064,95 @@ spark.sql("""
 
 # COMMAND ----------
 
+# DBTITLE 1,Calibration Plot: Predicted Buckets vs Actual Conversion Rate
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+
+# Build calibration data from df_scored (created in the cell above)
+calibration_pdf = (
+    df_scored
+    .withColumn(
+        "probability_bucket",
+        F.when(F.col("conversion_probability") < 0.2, "0.0 - 0.2")
+         .when(F.col("conversion_probability") < 0.4, "0.2 - 0.4")
+         .when(F.col("conversion_probability") < 0.6, "0.4 - 0.6")
+         .when(F.col("conversion_probability") < 0.8, "0.6 - 0.8")
+         .otherwise("0.8 - 1.0")
+    )
+    .groupBy("probability_bucket")
+    .agg(
+        F.count("*").alias("total_leads"),
+        F.sum(F.col("label").cast("int")).alias("actual_conversions"),
+        F.round(F.avg("label"), 3).alias("actual_conversion_rate"),
+    )
+    .orderBy("probability_bucket")
+    .toPandas()
+)
+
+# Midpoints for the ideal calibration reference line
+bucket_midpoints = [0.1, 0.3, 0.5, 0.7, 0.9]
+
+fig, ax1 = plt.subplots(figsize=(10, 6))
+
+# --- Bar chart: lead volume per bucket ---
+bars = ax1.bar(
+    calibration_pdf["probability_bucket"],
+    calibration_pdf["total_leads"],
+    color="#4A90D9", alpha=0.7, label="Total Leads", zorder=2
+)
+ax1.set_xlabel("Predicted Probability Bucket", fontsize=12)
+ax1.set_ylabel("Number of Leads", fontsize=12, color="#4A90D9")
+ax1.tick_params(axis="y", labelcolor="#4A90D9")
+
+# Add count labels on bars
+for bar, count in zip(bars, calibration_pdf["total_leads"]):
+    ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 50,
+             f"{count:,}", ha="center", va="bottom", fontsize=10, fontweight="bold")
+
+# --- Line chart: actual conversion rate (secondary y-axis) ---
+ax2 = ax1.twinx()
+ax2.plot(
+    calibration_pdf["probability_bucket"],
+    calibration_pdf["actual_conversion_rate"],
+    color="#E55934", marker="o", linewidth=2.5, markersize=8,
+    label="Actual Conversion Rate", zorder=3
+)
+
+# Ideal calibration reference line (dashed)
+ax2.plot(
+    calibration_pdf["probability_bucket"],
+    bucket_midpoints,
+    color="gray", linestyle="--", linewidth=1.5, alpha=0.6,
+    label="Ideal Calibration", zorder=1
+)
+
+ax2.set_ylabel("Actual Conversion Rate", fontsize=12, color="#E55934")
+ax2.tick_params(axis="y", labelcolor="#E55934")
+ax2.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
+ax2.set_ylim(0, 1.05)
+
+# --- Legend and title ---
+lines1, labels1 = ax1.get_legend_handles_labels()
+lines2, labels2 = ax2.get_legend_handles_labels()
+ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper left", fontsize=10)
+
+plt.title("Model Calibration: Predicted Probability vs Actual Conversion Rate",
+          fontsize=14, fontweight="bold", pad=15)
+fig.tight_layout()
+plt.show()
+
+print("\nInterpretation: The red line closely tracks the dashed ideal line,")
+print("confirming the model is well-calibrated \u2014 predicted probabilities")
+print("match observed conversion rates across all buckets.")
+print("\nFor the sales team, this means a lead scored at 0.7 truly has ~70% chance")
+print("of converting \u2014 the scores can be trusted as-is for prioritization.")
+print("\nNotice the bar heights: most leads fall in the 0.0-0.2 bucket. A well-calibrated")
+print("model with a skewed distribution like this helps sales focus effort on the")
+print("smaller pool of high-probability leads rather than spreading thin across all.")
+
+# COMMAND ----------
+
+# DBTITLE 1,Section 4: pyspark.ml.connect
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 4: Latest Features (Brief Intro)
@@ -1000,6 +1176,7 @@ spark.sql("""
 
 # COMMAND ----------
 
+# DBTITLE 1,Conceptual: Spark ML via Databricks Connect
 # NOTE: The code below illustrates the pattern but is designed to run
 # from a LOCAL environment with Databricks Connect, not from a notebook.
 # It is included here for educational purposes.
@@ -1034,6 +1211,7 @@ print("This runs from a local IDE with Databricks Connect, not from a notebook."
 
 # COMMAND ----------
 
+# DBTITLE 1,TorchDistributor: Distributed Deep Learning
 # MAGIC %md
 # MAGIC ## 4.2 — `TorchDistributor` — Distributed Deep Learning
 # MAGIC
@@ -1052,6 +1230,7 @@ print("This runs from a local IDE with Databricks Connect, not from a notebook."
 
 # COMMAND ----------
 
+# DBTITLE 1,Conceptual: TorchDistributor Example
 # NOTE: Requires a GPU-enabled cluster (not serverless).
 # This is a conceptual illustration of the TorchDistributor pattern.
 
@@ -1121,6 +1300,7 @@ print("Requires a GPU-enabled cluster for execution.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Module 1 Summary
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Summary
@@ -1146,6 +1326,7 @@ print("Requires a GPU-enabled cluster for execution.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Next: Module 2
 # MAGIC %md
 # MAGIC ---
 # MAGIC *Module 1 complete. Proceed to Module 2: MLflow & Model Management.*

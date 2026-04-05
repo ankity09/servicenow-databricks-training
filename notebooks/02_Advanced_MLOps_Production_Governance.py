@@ -1,5 +1,5 @@
 # Databricks notebook source
-
+# DBTITLE 1,Module 2: Advanced MLOps and Production Governance
 # MAGIC %md
 # MAGIC # Module 2: Advanced MLOps & Production Governance
 # MAGIC
@@ -26,26 +26,31 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Setup and Configuration
 # MAGIC %md
 # MAGIC ## Setup & Configuration
 
 # COMMAND ----------
 
+# DBTITLE 1,Run Config File
 # MAGIC %run ./_config
 
 # COMMAND ----------
 
+# DBTITLE 1,Verify Config and Activate Namespace
 # MAGIC %md
 # MAGIC Verify that the shared configuration loaded correctly and activate our training namespace.
 
 # COMMAND ----------
 
+# DBTITLE 1,Set Active Catalog and Schema
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"USE SCHEMA {schema}")
 print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Install Required Libraries
 # MAGIC %md
 # MAGIC ## Install Required Libraries
 # MAGIC
@@ -53,29 +58,35 @@ print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Install pip Packages
 # MAGIC %pip install xgboost lightgbm optuna hyperopt mlflow scikit-learn matplotlib seaborn --quiet
 
 # COMMAND ----------
 
+# DBTITLE 1,Restart Python
 dbutils.library.restartPython()
 
 # COMMAND ----------
 
+# DBTITLE 1,Reload Config After Restart
 # MAGIC %run ./_config
 
 # COMMAND ----------
 
+# DBTITLE 1,Reload Configuration Note
 # MAGIC %md
 # MAGIC After installing libraries (which restarts the Python process), reload the shared configuration.
 
 # COMMAND ----------
 
+# DBTITLE 1,Re-activate Catalog and Schema
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"USE SCHEMA {schema}")
 print(f"Config reloaded: {catalog}.{schema}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 1: Hyperparameter Tuning at Scale
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 1: Hyperparameter Tuning at Scale
@@ -92,6 +103,7 @@ print(f"Config reloaded: {catalog}.{schema}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Rebuild the Feature Table
 # MAGIC %md
 # MAGIC ### 1.1 Rebuild the Feature Table
 # MAGIC
@@ -101,9 +113,10 @@ print(f"Config reloaded: {catalog}.{schema}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Load Raw GTM Tables
 from pyspark.sql import functions as F
 
-# ── Load raw tables ──────────────────────────────────────────────
+# ── Load raw tables ─────────────────────────────────────────
 accounts     = spark.table(f"{catalog}.{schema}.gtm_accounts")
 contacts     = spark.table(f"{catalog}.{schema}.gtm_contacts")
 opportunities = spark.table(f"{catalog}.{schema}.gtm_opportunities")
@@ -112,11 +125,13 @@ lead_scores  = spark.table(f"{catalog}.{schema}.gtm_lead_scores")
 
 # COMMAND ----------
 
+# DBTITLE 1,Validate Table Loads
 # MAGIC %md
 # MAGIC Validate that all training tables from Notebook 00 loaded successfully.
 
 # COMMAND ----------
 
+# DBTITLE 1,Print Table Row Counts
 print("Table row counts:")
 print(f"  accounts      : {accounts.count():,}")
 print(f"  contacts      : {contacts.count():,}")
@@ -126,7 +141,8 @@ print(f"  lead_scores   : {lead_scores.count():,}")
 
 # COMMAND ----------
 
-# ── Aggregate activity features per contact ──────────────────────
+# DBTITLE 1,Aggregate Activity Features per Contact
+# ── Aggregate activity features per contact ──────────────────
 activity_features = (
     activities
     .groupBy("contact_id")
@@ -145,7 +161,8 @@ print(f"Activity features: {activity_features.count():,} contacts with activity 
 
 # COMMAND ----------
 
-# ── Aggregate opportunity features per account ────────────────────
+# DBTITLE 1,Aggregate Opportunity Features per Account
+# ── Aggregate opportunity features per account ────────────────
 opp_features = (
     opportunities
     .groupBy("account_id")
@@ -164,7 +181,8 @@ print(f"Opportunity features: {opp_features.count():,} accounts with opportunity
 
 # COMMAND ----------
 
-# ── Join everything into a single feature table ───────────────────
+# DBTITLE 1,Join into Feature Table
+# ── Join everything into a single feature table ───────────────
 feature_df = (
     lead_scores
     .join(contacts.select("contact_id", "account_id", "lead_source", "title", "department"),
@@ -182,10 +200,12 @@ feature_df.printSchema()
 
 # COMMAND ----------
 
+# DBTITLE 1,Preview Feature Table
 display(feature_df.limit(10))
 
 # COMMAND ----------
 
+# DBTITLE 1,Prepare Data for XGBoost
 # MAGIC %md
 # MAGIC ### 1.2 Prepare Data for Scikit-Learn / XGBoost
 # MAGIC
@@ -195,6 +215,7 @@ display(feature_df.limit(10))
 
 # COMMAND ----------
 
+# DBTITLE 1,Define Features and Exclude Target Leakage
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -208,11 +229,14 @@ from sklearn.metrics import (
 # Convert to Pandas
 pdf = feature_df.toPandas()
 
-# ── Define target and feature columns ────────────────────────────
+# ── Define target and feature columns ──────────────────────────────────
 target_col = "converted"
 
 # Identify numeric and categorical columns
-exclude_cols = [target_col, "contact_id", "account_id", "score_id"]
+# NOTE: "days_to_convert" is excluded because it leaks the target --
+# it is 0 for non-converted leads and positive for converted leads,
+# making it a perfect (but illegitimate) predictor.
+exclude_cols = [target_col, "contact_id", "account_id", "score_id", "days_to_convert"]
 categorical_cols = ["lead_source", "title", "department", "industry"]
 numeric_cols = [c for c in pdf.columns
                 if c not in exclude_cols
@@ -227,7 +251,8 @@ print(f"  {categorical_cols}")
 
 # COMMAND ----------
 
-# ── Encode categorical features ──────────────────────────────────
+# DBTITLE 1,Encode Features and Train/Test Split
+# ── Encode categorical features ──────────────────────────────
 label_encoders = {}
 for col in categorical_cols:
     le = LabelEncoder()
@@ -240,7 +265,7 @@ feature_cols = numeric_cols + categorical_cols
 X = pdf[feature_cols].values
 y = pdf[target_col].values
 
-# ── Train / test split ───────────────────────────────────────────
+# ── Train / test split ───────────────────────────────────────
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
@@ -251,6 +276,7 @@ print(f"Target rate  : {y.mean():.2%} converted")
 
 # COMMAND ----------
 
+# DBTITLE 1,Hyperopt Tuning Introduction
 # MAGIC %md
 # MAGIC ### 1.3 Hyperparameter Tuning with Hyperopt (Serverless-Compatible)
 # MAGIC
@@ -279,6 +305,7 @@ print(f"Target rate  : {y.mean():.2%} converted")
 
 # COMMAND ----------
 
+# DBTITLE 1,Import MLflow and Hyperopt
 import mlflow
 import mlflow.xgboost
 from xgboost import XGBClassifier
@@ -289,7 +316,8 @@ mlflow.set_experiment(f"/Users/{username}/servicenow_lead_scoring")
 
 # COMMAND ----------
 
-# ── Define the search space ──────────────────────────────────────
+# DBTITLE 1,Define Search Space and Objective Function
+# ── Define the search space ──────────────────────────────────
 # hp.choice passes the *actual chosen value* to the objective function,
 # but fmin() returns *indices* in best_params. Keep lookup lists for decoding.
 MAX_DEPTH_OPTIONS = [3, 4, 5, 6, 7, 8, 10]
@@ -306,7 +334,7 @@ search_space = {
     "gamma":            hp.uniform("gamma", 0, 0.5),
 }
 
-# ── Define the objective function ────────────────────────────────
+# ── Define the objective function ────────────────────────────
 def objective(params):
     """
     Train an XGBoost model with the given hyperparameters.
@@ -348,6 +376,7 @@ def objective(params):
 
 # COMMAND ----------
 
+# DBTITLE 1,Hyperopt Trials Description
 # MAGIC %md
 # MAGIC **Running 20 trials with Hyperopt Trials...**
 # MAGIC
@@ -357,7 +386,8 @@ def objective(params):
 
 # COMMAND ----------
 
-# ── Run Hyperopt ─────────────────────────────────────────────────
+# DBTITLE 1,Run Hyperopt Tuning
+# ── Run Hyperopt ─────────────────────────────────────────────
 # Trials runs sequentially on the driver (serverless-compatible)
 # Note: SparkTrials is NOT supported on serverless compute
 trials = Trials()
@@ -379,7 +409,8 @@ print(f"Parent run ID: {parent_run_id}")
 
 # COMMAND ----------
 
-# ── Decode best parameters ───────────────────────────────────────
+# DBTITLE 1,Decode Best Hyperparameters
+# ── Decode best parameters ─────────────────────────────────
 # hp.choice returns indices, so we map them back to actual values
 best_decoded = {
     "learning_rate":    best_params["learning_rate"],
@@ -401,6 +432,7 @@ for k, v in best_decoded.items():
 
 # COMMAND ----------
 
+# DBTITLE 1,Train Best Model and Evaluate
 # MAGIC %md
 # MAGIC ### 1.4 Train the Best Model and Evaluate
 # MAGIC
@@ -408,13 +440,14 @@ for k, v in best_decoded.items():
 
 # COMMAND ----------
 
+# DBTITLE 1,Train Champion Model and Compute Metrics
 import matplotlib.pyplot as plt
 import seaborn as sns
 import tempfile
 import os
 from sklearn.metrics import roc_curve
 
-# ── Train the champion model ─────────────────────────────────────
+# ── Train the champion model ─────────────────────────────────
 best_model = XGBClassifier(
     **best_decoded,
     eval_metric="logloss",
@@ -426,7 +459,7 @@ best_model.fit(X_train, y_train)
 y_pred_proba = best_model.predict_proba(X_test)[:, 1]
 y_pred       = best_model.predict(X_test)
 
-# ── Compute all metrics ──────────────────────────────────────────
+# ── Compute all metrics ────────────────────────────────────
 metrics = {
     "auc":       roc_auc_score(y_test, y_pred_proba),
     "accuracy":  accuracy_score(y_test, y_pred),
@@ -445,7 +478,8 @@ print(classification_report(y_test, y_pred, target_names=["Not Converted", "Conv
 
 # COMMAND ----------
 
-# ── Visualize: ROC Curve and Confusion Matrix ────────────────────
+# DBTITLE 1,Visualize ROC Curve and Confusion Matrix
+# ── Visualize: ROC Curve and Confusion Matrix ────────────────
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
 # ROC Curve
@@ -474,6 +508,7 @@ plt.show()
 
 # COMMAND ----------
 
+# DBTITLE 1,Optuna Introduction
 # MAGIC %md
 # MAGIC ### 1.5 Bonus: Hyperparameter Tuning with Optuna
 # MAGIC
@@ -485,6 +520,7 @@ plt.show()
 
 # COMMAND ----------
 
+# DBTITLE 1,Run Optuna Study
 import optuna
 from optuna.samplers import TPESampler
 
@@ -517,7 +553,7 @@ def optuna_objective(trial):
     return auc  # Optuna maximizes by default when direction="maximize"
 
 
-# ── Run Optuna study ─────────────────────────────────────────────
+# ── Run Optuna study ───────────────────────────────────────
 study = optuna.create_study(
     direction="maximize",
     sampler=TPESampler(seed=42),
@@ -536,6 +572,7 @@ for k, v in study.best_params.items():
 
 # COMMAND ----------
 
+# DBTITLE 1,Hyperopt vs Optuna Comparison
 # MAGIC %md
 # MAGIC ### Hyperopt vs. Optuna -- Quick Comparison
 # MAGIC
@@ -557,6 +594,7 @@ for k, v in study.best_params.items():
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 2: MLflow and Model Registry
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 2: MLflow Experiment Tracking & Unity Catalog Model Registry
@@ -570,11 +608,13 @@ for k, v in study.best_params.items():
 
 # COMMAND ----------
 
+# DBTITLE 1,Log Production Run with Artifacts
 # MAGIC %md
 # MAGIC ### 2.1 Log a Production Run with Full Artifacts
 
 # COMMAND ----------
 
+# DBTITLE 1,Configure MLflow and Registry URI
 import mlflow
 import mlflow.xgboost
 import json
@@ -589,11 +629,32 @@ model_name = f"{catalog}.{schema}.lead_scoring_model"
 
 # COMMAND ----------
 
+# DBTITLE 1,Log Full MLflow Run with Artifacts
+import mlflow.pyfunc
+from mlflow.models import infer_signature
+
+# ── Pyfunc wrapper: serve probabilities instead of class labels ──────
+# XGBoost's native predict() returns 0/1 labels, but lead scoring needs
+# conversion *probabilities* (e.g., 0.72). This wrapper calls predict_proba
+# and returns only the positive-class probability.
+class LeadScoringModel(mlflow.pyfunc.PythonModel):
+    """Wraps XGBClassifier to serve conversion probabilities."""
+    def __init__(self, xgb_model):
+        self.xgb_model = xgb_model
+
+    def predict(self, context, model_input, params=None):
+        if isinstance(model_input, pd.DataFrame):
+            data = model_input.values
+        else:
+            data = model_input
+        return self.xgb_model.predict_proba(data)[:, 1]
+
+
 with mlflow.start_run(run_name="xgboost_champion_candidate") as run:
     run_id = run.info.run_id
     print(f"MLflow Run ID: {run_id}")
 
-    # ── Log hyperparameters ──────────────────────────────────────
+    # ── Log hyperparameters ──────────────────────────────
     if "best_decoded" not in dir():
         best_decoded = {"note": "hyperopt_skipped"}
     mlflow.log_params(best_decoded)
@@ -602,19 +663,24 @@ with mlflow.start_run(run_name="xgboost_champion_candidate") as run:
     mlflow.log_param("training_rows", X_train.shape[0])
     mlflow.log_param("test_rows", X_test.shape[0])
 
-    # ── Log metrics ──────────────────────────────────────────────
+    # ── Log metrics ────────────────────────────────────
     for metric_name, metric_val in metrics.items():
         mlflow.log_metric(metric_name, metric_val)
 
-    # ── Log the model ────────────────────────────────────────────
-    # MLflow's XGBoost flavor creates a reusable model artifact
-    mlflow.xgboost.log_model(
-        xgb_model=best_model,
+    # ── Log the model (pyfunc wrapper for probabilities) ──────
+    sample_input = pd.DataFrame(X_test[:5], columns=feature_cols)
+    sample_output = best_model.predict_proba(X_test[:5])[:, 1]
+    signature = infer_signature(sample_input, sample_output)
+
+    mlflow.pyfunc.log_model(
         artifact_path="model",
-        input_example=X_test[:5],
+        python_model=LeadScoringModel(best_model),
+        signature=signature,
+        input_example=sample_input,
+        pip_requirements=["xgboost", "scikit-learn", "numpy", "pandas"],
     )
 
-    # ── Log feature importance plot ──────────────────────────────
+    # ── Log feature importance plot ──────────────────────
     fig_imp, ax_imp = plt.subplots(figsize=(10, 6))
     importance = best_model.feature_importances_
     sorted_idx = np.argsort(importance)[::-1]
@@ -633,7 +699,7 @@ with mlflow.start_run(run_name="xgboost_champion_candidate") as run:
     mlflow.log_artifact(os.path.join(tempfile.gettempdir(), "feature_importance.png"))
     plt.show()
 
-    # ── Log confusion matrix plot ────────────────────────────────
+    # ── Log confusion matrix plot ───────────────────────
     fig_cm, ax_cm = plt.subplots(figsize=(6, 5))
     cm = confusion_matrix(y_test, y_pred)
     sns.heatmap(cm, annot=True, fmt="d", cmap="Greens", ax=ax_cm,
@@ -647,7 +713,7 @@ with mlflow.start_run(run_name="xgboost_champion_candidate") as run:
     mlflow.log_artifact(os.path.join(tempfile.gettempdir(), "confusion_matrix.png"))
     plt.show()
 
-    # ── Log feature list as JSON artifact ────────────────────────
+    # ── Log feature list as JSON artifact ────────────────
     feature_meta = {
         "feature_columns": feature_cols,
         "categorical_columns": categorical_cols,
@@ -658,7 +724,7 @@ with mlflow.start_run(run_name="xgboost_champion_candidate") as run:
         json.dump(feature_meta, f, indent=2)
     mlflow.log_artifact(os.path.join(tempfile.gettempdir(), "feature_metadata.json"))
 
-    # ── Log tags for searchability ───────────────────────────────
+    # ── Log tags for searchability ───────────────────────
     mlflow.set_tag("model_purpose", "lead_scoring")
     mlflow.set_tag("dataset", f"{catalog}.{schema}.gtm_lead_scores")
     mlflow.set_tag("tuning_method", "hyperopt_trials")
@@ -670,9 +736,11 @@ with mlflow.start_run(run_name="xgboost_champion_candidate") as run:
     print(f"  Accuracy  : {metrics['accuracy']:.4f}")
     print(f"  F1        : {metrics['f1_score']:.4f}")
     print(f"  Artifacts : feature_importance.png, confusion_matrix.png, feature_metadata.json")
+    print(f"  Model     : pyfunc wrapper (returns conversion probabilities)")
 
 # COMMAND ----------
 
+# DBTITLE 1,Register Model in Unity Catalog
 # MAGIC %md
 # MAGIC ### 2.2 Register Model in Unity Catalog
 # MAGIC
@@ -699,11 +767,12 @@ with mlflow.start_run(run_name="xgboost_champion_candidate") as run:
 
 # COMMAND ----------
 
+# DBTITLE 1,Register Model Version
 from mlflow.tracking import MlflowClient
 
 client = MlflowClient()
 
-# ── Register the model ───────────────────────────────────────────
+# ── Register the model ───────────────────────────────────────
 model_uri = f"runs:/{run_id}/model"
 
 model_version = mlflow.register_model(
@@ -718,7 +787,8 @@ print(f"  Source  : {model_version.source}")
 
 # COMMAND ----------
 
-# ── Add description to the registered model ──────────────────────
+# DBTITLE 1,Add Model Descriptions
+# ── Add description to the registered model ──────────────────
 client.update_registered_model(
     name=model_name,
     description=(
@@ -729,7 +799,7 @@ client.update_registered_model(
     ),
 )
 
-# ── Add description to this specific version ─────────────────────
+# ── Add description to this specific version ─────────────────
 client.update_model_version(
     name=model_name,
     version=model_version.version,
@@ -744,7 +814,8 @@ print("Model and version descriptions updated.")
 
 # COMMAND ----------
 
-# ── Set the "champion" alias ─────────────────────────────────────
+# DBTITLE 1,Set Champion Alias
+# ── Set the "champion" alias ─────────────────────────────────
 # Aliases replace the old Stage-based model promotion (Staging/Production).
 # They are flexible labels you can assign to any version.
 client.set_registered_model_alias(
@@ -757,7 +828,8 @@ print(f"Alias 'champion' set on version {model_version.version}")
 
 # COMMAND ----------
 
-# ── List all versions and aliases ────────────────────────────────
+# DBTITLE 1,List Model Versions and Aliases
+# ── List all versions and aliases ────────────────────────────
 print(f"Model: {model_name}")
 print("=" * 60)
 
@@ -781,6 +853,7 @@ for v in versions:
 
 # COMMAND ----------
 
+# DBTITLE 1,Load Model from Unity Catalog
 # MAGIC %md
 # MAGIC ### 2.3 Load the Model Back from Unity Catalog
 # MAGIC
@@ -789,17 +862,22 @@ for v in versions:
 
 # COMMAND ----------
 
-# ── Load by alias (recommended for production) ───────────────────
-champion_model = mlflow.xgboost.load_model(f"models:/{model_name}@champion")
+# DBTITLE 1,Load Champion Model by Alias
+# ── Load by alias (recommended for production) ───────────────
+# The model is logged as a pyfunc wrapper, so we use pyfunc.load_model.
+# predict() now returns conversion probabilities directly.
+champion_model = mlflow.pyfunc.load_model(f"models:/{model_name}@champion")
 
 # Quick sanity check: score a few test rows
-sample_preds = champion_model.predict_proba(X_test[:5])[:, 1]
+sample_input = pd.DataFrame(X_test[:5], columns=feature_cols)
+sample_preds = champion_model.predict(sample_input)
 print("Sample predictions from champion model:")
 for i, prob in enumerate(sample_preds):
     print(f"  Lead {i+1}: {prob:.3f} conversion probability")
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 3: Model Serving Deployment
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 3: Model Serving Deployment
@@ -815,11 +893,13 @@ for i, prob in enumerate(sample_preds):
 
 # COMMAND ----------
 
+# DBTITLE 1,Create a Model Serving Endpoint
 # MAGIC %md
 # MAGIC ### 3.1 Create a Model Serving Endpoint
 
 # COMMAND ----------
 
+# DBTITLE 1,Import Serving SDK
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import (
     EndpointCoreConfigInput,
@@ -832,12 +912,14 @@ endpoint_name = "servicenow-lead-scoring"
 
 # COMMAND ----------
 
+# DBTITLE 1,Auto Capture Deprecation Note
 # MAGIC %md
 # MAGIC > **Note:** `AutoCaptureConfigInput` is deprecated. Use **AI Gateway inference tables** for production monitoring instead. Configure them via the Databricks UI under Serving > Endpoint > AI Gateway settings.
 
 # COMMAND ----------
 
-# ── Define the endpoint configuration ────────────────────────────
+# DBTITLE 1,Create or Update Serving Endpoint
+# ── Define the endpoint configuration ────────────────────────
 # We create the endpoint without auto_capture_config (use AI Gateway instead).
 served_entities = [
     ServedEntityInput(
@@ -849,10 +931,11 @@ served_entities = [
 ]
 
 endpoint_config = EndpointCoreConfigInput(
+    name=endpoint_name,
     served_entities=served_entities,
 )
 
-# ── Create or update the endpoint ────────────────────────────────
+# ── Create or update the endpoint ────────────────────────────
 try:
     # Check if endpoint already exists
     existing = w.serving_endpoints.get(endpoint_name)
@@ -891,13 +974,15 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,Wait for Endpoint Ready
 # MAGIC %md
 # MAGIC ### 3.2 Wait for Endpoint to Be Ready
 # MAGIC
 
 # COMMAND ----------
 
-# ── Poll endpoint status ─────────────────────────────────────────
+# DBTITLE 1,Poll Endpoint Status
+# ── Poll endpoint status ─────────────────────────────────────
 def check_endpoint_status(endpoint_name):
     """Check the current status of a serving endpoint."""
     try:
@@ -918,6 +1003,7 @@ if not is_ready:
 
 # COMMAND ----------
 
+# DBTITLE 1,Query the Serving Endpoint
 # MAGIC %md
 # MAGIC ### 3.3 Query the Serving Endpoint
 # MAGIC
@@ -926,7 +1012,8 @@ if not is_ready:
 
 # COMMAND ----------
 
-# ── Build sample payload ─────────────────────────────────────────
+# DBTITLE 1,Build Sample Payload
+# ── Build sample payload ─────────────────────────────────────
 # Create a small DataFrame of sample leads to score
 sample_leads = pdf[feature_cols].head(5).to_dict(orient="split")
 
@@ -936,22 +1023,49 @@ for i, row in enumerate(sample_leads["data"][:2]):
 
 # COMMAND ----------
 
+# DBTITLE 1,Query Serving Endpoint via REST API
 # ── Query the endpoint ───────────────────────────────────────────
+# Note: We use w.api_client.do() instead of w.serving_endpoints.query()
+# because the SDK's query() method has a serialization bug with dict inputs
+# ('dict' object has no attribute 'as_dict').
+
+# First, wait for any pending config update to finish.
+# After cell 51 updates the served model version, the endpoint needs time
+# to redeploy. The SDK returns enum objects (e.g. EndpointStateReady.READY),
+# so we compare with str() for robustness.
+print("Waiting for endpoint config to stabilise...")
+for i in range(30):
+    ep = w.serving_endpoints.get(endpoint_name)
+    cfg_state = str(ep.state.config_update)   # e.g. "EndpointStateConfigUpdate.NOT_UPDATING"
+    ready_state = str(ep.state.ready)         # e.g. "EndpointStateReady.READY"
+    if "READY" in ready_state and "NOT_UPDATING" in cfg_state:
+        print(f"Endpoint ready (config_update={cfg_state}).")
+        break
+    print(f"  [{i+1}/30] ready={ready_state}, config_update={cfg_state} — waiting 20s ...")
+    time.sleep(20)
+else:
+    print("Endpoint did not stabilise in 10 min. Trying query anyway ...")
+
+# ── Send scoring request ─────────────────────────────────────────
 try:
-    response = w.serving_endpoints.query(
-        name=endpoint_name,
-        dataframe_split=sample_leads,
+    response = w.api_client.do(
+        "POST",
+        f"/serving-endpoints/{endpoint_name}/invocations",
+        body={"dataframe_split": sample_leads},
     )
-    print("Real-time predictions:")
+    print("\nReal-time predictions:")
     print("-" * 40)
-    if hasattr(response, "predictions"):
-        for i, pred in enumerate(response.predictions):
-            print(f"  Lead {i+1}: {pred}")
-    else:
-        print(f"  Response: {response}")
+    predictions = response.get("predictions", [])
+    for i, pred in enumerate(predictions):
+        print(f"  Lead {i+1}: {pred}")
 except Exception as e:
     error_msg = str(e)
-    if "NOT_READY" in error_msg or "not ready" in error_msg.lower():
+    if "shape" in error_msg and ("26" in error_msg or "columns" in error_msg):
+        print("Schema mismatch: the endpoint is still serving a previous model")
+        print("version that expects 26 features (including days_to_convert).")
+        print("The new version (25 features) is deploying — wait a few")
+        print("minutes for the config update to complete and re-run this cell.")
+    elif "NOT_READY" in error_msg or "not ready" in error_msg.lower():
         print("Endpoint is still provisioning. Please wait a few minutes and re-run this cell.")
     else:
         print(f"Error querying endpoint: {e}")
@@ -959,6 +1073,7 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,A/B Testing and Traffic Routing
 # MAGIC %md
 # MAGIC ### 3.4 A/B Testing and Traffic Routing
 # MAGIC
@@ -1025,6 +1140,7 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 4: Inference Tables and Monitoring
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 4: Inference Tables & Monitoring
@@ -1036,7 +1152,7 @@ except Exception as e:
 # MAGIC 3. **System Tables** -- operational metrics (latency, throughput, errors)
 # MAGIC
 # MAGIC ```
-# MAGIC ┌─────────────────────────────────────────────────────────────────┐
+# MAGIC ┌───────────────────────────────────────────────────────────────┐
 # MAGIC │                    Monitoring Architecture                       │
 # MAGIC │                                                                  │
 # MAGIC │  Request ──> Serving ──> Inference Table ──> Lakehouse Monitor  │
@@ -1045,11 +1161,12 @@ except Exception as e:
 # MAGIC │                ▼                                    ▼            │
 # MAGIC │          System Tables                        Alert / Retrain   │
 # MAGIC │          (latency, errors)                    Pipeline Trigger  │
-# MAGIC └─────────────────────────────────────────────────────────────────┘
+# MAGIC └───────────────────────────────────────────────────────────────┘
 # MAGIC ```
 
 # COMMAND ----------
 
+# DBTITLE 1,Inference Tables Overview
 # MAGIC %md
 # MAGIC ### 4.1 Inference Tables
 # MAGIC
@@ -1080,110 +1197,162 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,Check Inference Table
 # ── Check if inference table exists ──────────────────────────────
 # Note: The table is created after the first request to the endpoint.
 # It may not exist yet if no requests have been sent.
 inference_table_name = f"{catalog}.{schema}.lead_scoring_{endpoint_name.replace('-', '_')}_payload"
 
-try:
+# Check table existence via catalog before querying to avoid noisy GRPC errors
+table_exists = spark.catalog.tableExists(inference_table_name)
+
+if table_exists:
     inf_df = spark.table(inference_table_name)
+    row_count = inf_df.count()
     print(f"Inference table found: {inference_table_name}")
-    print(f"  Row count: {inf_df.count()}")
+    print(f"  Row count: {row_count}")
     display(inf_df.limit(5))
-except Exception as e:
+else:
     print(f"Inference table not yet available: {inference_table_name}")
     print("This table is created after the first request hits the serving endpoint.")
     print("Once the endpoint is ready and you've sent requests, re-run this cell.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Monitoring with System Tables
 # MAGIC %md
-# MAGIC ### 4.2 Monitoring with System Tables
+# MAGIC ### 4.2 Monitoring with Real Endpoint Traffic
 # MAGIC
-# MAGIC Databricks system tables provide operational metrics for serving endpoints.
-# MAGIC These are available in `system.serving` (if enabled for your workspace).
+# MAGIC To demonstrate monitoring, we send real scoring requests to the endpoint,
+# MAGIC measure actual latency and capture status codes, then query the results.
 # MAGIC
+# MAGIC Databricks also provides **inference tables** (auto-captured payload logs) and
+# MAGIC **system tables** (`system.serving`) for production monitoring. Below we query
+# MAGIC our captured request log, which mirrors the same schema and patterns.
 
 # COMMAND ----------
 
-# ── Query system tables for serving metrics ──────────────────────
-# Note: system.serving tables may not be available in all workspaces.
-# These queries are wrapped in try/except so the notebook continues
-# even if system tables are not enabled.
+# DBTITLE 1,Populate Inference Table with Real Requests
+# ── Send real requests and capture metrics ───────────────────────
+# We query the endpoint repeatedly, measure actual latency and status codes,
+# and write the results to a Delta table for monitoring analysis.
+import time
+from datetime import datetime
 
-try:
-    # Request volume over time (last 24 hours)
-    request_volume_df = spark.sql("""
-        SELECT
-          date_trunc('hour', request_time) AS hour,
-          COUNT(*) AS request_count,
-          AVG(execution_time_ms) AS avg_latency_ms,
-          PERCENTILE(execution_time_ms, 0.95) AS p95_latency_ms,
-          PERCENTILE(execution_time_ms, 0.99) AS p99_latency_ms
-        FROM system.serving.served_model_requests
-        WHERE
-          served_entity_name LIKE '%lead_scoring%'
-          AND request_time > current_timestamp() - INTERVAL 24 HOURS
-        GROUP BY 1
-        ORDER BY 1
-    """)
-    display(request_volume_df)
-except Exception as e:
-    print(f"System table query skipped: {type(e).__name__}")
-    print("system.serving tables may not be enabled in this workspace.")
-    print("This is expected -- these queries demonstrate monitoring patterns.")
+request_log = []
+num_batches = 20  # 20 batches x 5 leads = 100 predictions
 
-# COMMAND ----------
+print(f"Sending {num_batches} scoring requests to '{endpoint_name}'...")
+for i in range(num_batches):
+    start = time.time()
+    try:
+        resp = w.api_client.do(
+            "POST",
+            f"/serving-endpoints/{endpoint_name}/invocations",
+            body={"dataframe_split": sample_leads},
+        )
+        latency_ms = round((time.time() - start) * 1000, 1)
+        request_log.append((
+            datetime.utcnow(),
+            endpoint_name,
+            f"lead_scoring_model-{model_version.version}",
+            latency_ms,
+            200,
+            len(resp.get("predictions", [])),
+        ))
+    except Exception as e:
+        latency_ms = round((time.time() - start) * 1000, 1)
+        request_log.append((
+            datetime.utcnow(),
+            endpoint_name,
+            f"lead_scoring_model-{model_version.version}",
+            latency_ms,
+            500,
+            0,
+        ))
 
-try:
-    # Error rate monitoring
-    error_rate_df = spark.sql("""
-        SELECT
-          date_trunc('hour', request_time) AS hour,
-          COUNT(*) AS total_requests,
-          SUM(CASE WHEN status_code != 200 THEN 1 ELSE 0 END) AS error_count,
-          ROUND(
-            SUM(CASE WHEN status_code != 200 THEN 1 ELSE 0 END) * 100.0 / COUNT(*),
-            2
-          ) AS error_rate_pct
-        FROM system.serving.served_model_requests
-        WHERE
-          served_entity_name LIKE '%lead_scoring%'
-          AND request_time > current_timestamp() - INTERVAL 24 HOURS
-        GROUP BY 1
-        ORDER BY 1
-    """)
-    display(error_rate_df)
-except Exception as e:
-    print(f"Error rate query skipped: {type(e).__name__}")
+print(f"  ✅ Completed {len(request_log)} requests")
 
-# COMMAND ----------
+# Write to a Delta table
+request_log_df = spark.createDataFrame(
+    request_log,
+    ["request_time", "endpoint_name", "served_entity_name",
+     "execution_time_ms", "status_code", "prediction_count"]
+)
 
-try:
-    # Latency distribution by served entity (useful for A/B testing)
-    latency_df = spark.sql("""
-        SELECT
-          served_entity_name,
-          COUNT(*) AS request_count,
-          ROUND(AVG(execution_time_ms), 1) AS avg_latency_ms,
-          ROUND(PERCENTILE(execution_time_ms, 0.50), 1) AS p50_latency_ms,
-          ROUND(PERCENTILE(execution_time_ms, 0.95), 1) AS p95_latency_ms,
-          ROUND(PERCENTILE(execution_time_ms, 0.99), 1) AS p99_latency_ms,
-          MIN(request_time) AS first_request,
-          MAX(request_time) AS last_request
-        FROM system.serving.served_model_requests
-        WHERE
-          served_entity_name LIKE '%lead_scoring%'
-          AND request_time > current_timestamp() - INTERVAL 7 DAYS
-        GROUP BY 1
-        ORDER BY request_count DESC
-    """)
-    display(latency_df)
-except Exception as e:
-    print(f"Latency query skipped: {type(e).__name__}")
+monitoring_table = f"{catalog}.{schema}.lead_scoring_request_log"
+request_log_df.write.mode("overwrite").saveAsTable(monitoring_table)
+
+# Summary stats
+success = sum(1 for r in request_log if r[4] == 200)
+avg_latency = round(sum(r[3] for r in request_log) / len(request_log), 1)
+print(f"  Successes: {success}/{len(request_log)}")
+print(f"  Avg latency: {avg_latency} ms")
+print(f"  Saved to: {monitoring_table}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Query Request Volume Metrics
+# ── Request volume and latency over time ───────────────────────
+request_volume_df = spark.sql(f"""
+    SELECT
+      date_trunc('minute', request_time) AS minute,
+      COUNT(*) AS request_count,
+      ROUND(AVG(execution_time_ms), 1) AS avg_latency_ms,
+      ROUND(PERCENTILE(execution_time_ms, 0.95), 1) AS p95_latency_ms,
+      ROUND(PERCENTILE(execution_time_ms, 0.99), 1) AS p99_latency_ms
+    FROM {monitoring_table}
+    GROUP BY 1
+    ORDER BY 1
+""")
+print(f"Request volume from: {monitoring_table}")
+display(request_volume_df)
+
+# COMMAND ----------
+
+# DBTITLE 1,Query Error Rate Metrics
+# ── Error rate monitoring ────────────────────────────────────────
+error_rate_df = spark.sql(f"""
+    SELECT
+      COUNT(*) AS total_requests,
+      SUM(CASE WHEN status_code = 200 THEN 1 ELSE 0 END) AS success_count,
+      SUM(CASE WHEN status_code != 200 THEN 1 ELSE 0 END) AS error_count,
+      ROUND(
+        SUM(CASE WHEN status_code != 200 THEN 1 ELSE 0 END) * 100.0 / COUNT(*),
+        2
+      ) AS error_rate_pct,
+      SUM(prediction_count) AS total_predictions
+    FROM {monitoring_table}
+""")
+print(f"Error rate from: {monitoring_table}")
+display(error_rate_df)
+
+# COMMAND ----------
+
+# DBTITLE 1,Query Latency Distribution
+# ── Latency distribution by served entity ────────────────────────
+latency_df = spark.sql(f"""
+    SELECT
+      served_entity_name,
+      COUNT(*) AS request_count,
+      ROUND(AVG(execution_time_ms), 1) AS avg_latency_ms,
+      ROUND(MIN(execution_time_ms), 1) AS min_latency_ms,
+      ROUND(PERCENTILE(execution_time_ms, 0.50), 1) AS p50_latency_ms,
+      ROUND(PERCENTILE(execution_time_ms, 0.95), 1) AS p95_latency_ms,
+      ROUND(PERCENTILE(execution_time_ms, 0.99), 1) AS p99_latency_ms,
+      ROUND(MAX(execution_time_ms), 1) AS max_latency_ms,
+      MIN(request_time) AS first_request,
+      MAX(request_time) AS last_request
+    FROM {monitoring_table}
+    GROUP BY 1
+    ORDER BY request_count DESC
+""")
+print(f"Latency distribution from: {monitoring_table}")
+display(latency_df)
+
+# COMMAND ----------
+
+# DBTITLE 1,Data Drift Detection
 # MAGIC %md
 # MAGIC ### 4.3 Data Drift Detection
 # MAGIC
@@ -1196,9 +1365,10 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,Simulate Production Data with Drift
 from scipy import stats
 
-# ── Simulate production data with drift ──────────────────────────
+# ── Simulate production data with drift ──────────────────────
 # In practice, you would pull this from the inference table.
 # Here we simulate a production batch where some features have shifted.
 np.random.seed(42)
@@ -1221,7 +1391,8 @@ print(f"  Drift injected: total_activities (shifted +3), annual_revenue (scaled 
 
 # COMMAND ----------
 
-# ── Run drift detection on numeric features ──────────────────────
+# DBTITLE 1,Run KS Test for Drift Detection
+# ── Run drift detection on numeric features ──────────────────
 # The Kolmogorov-Smirnov (KS) test compares two probability distributions.
 # A p-value below 0.05 means the distributions are statistically different
 # -- a signal that input data has drifted from what the model was trained on.
@@ -1256,7 +1427,8 @@ print(drift_df.to_string(index=False))
 
 # COMMAND ----------
 
-# ── Visualize drift for top features ─────────────────────────────
+# DBTITLE 1,Visualize Feature Distribution Drift
+# ── Visualize drift for top features ─────────────────────────
 drifted_features = drift_df[drift_df["drift_detected"] == "YES"]["feature"].tolist()
 
 if drifted_features:
@@ -1280,6 +1452,7 @@ else:
 
 # COMMAND ----------
 
+# DBTITLE 1,Lakehouse Monitoring Conceptual
 # MAGIC %md
 # MAGIC ### 4.4 Lakehouse Monitoring (Conceptual)
 # MAGIC
@@ -1321,6 +1494,7 @@ else:
 
 # COMMAND ----------
 
+# DBTITLE 1,Automated Alerting
 # MAGIC %md
 # MAGIC ### 4.5 Automated Alerting
 # MAGIC
@@ -1380,6 +1554,7 @@ else:
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 5: Workflows and DABs
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 5: Workflows & DABs Overview
@@ -1392,6 +1567,7 @@ else:
 
 # COMMAND ----------
 
+# DBTITLE 1,Databricks Workflows
 # MAGIC %md
 # MAGIC ### 5.1 Databricks Workflows
 # MAGIC
@@ -1426,6 +1602,7 @@ else:
 
 # COMMAND ----------
 
+# DBTITLE 1,Databricks Asset Bundles
 # MAGIC %md
 # MAGIC ### 5.2 Databricks Asset Bundles (DABs) -- Infrastructure as Code
 # MAGIC
@@ -1476,6 +1653,7 @@ else:
 
 # COMMAND ----------
 
+# DBTITLE 1,Multi-Task Job Definition
 # MAGIC %md
 # MAGIC ### 5.3 Multi-Task Job Definition
 # MAGIC
@@ -1567,6 +1745,7 @@ else:
 
 # COMMAND ----------
 
+# DBTITLE 1,CI/CD Integration with Git
 # MAGIC %md
 # MAGIC ### 5.4 CI/CD Integration with Git
 # MAGIC
@@ -1639,6 +1818,7 @@ else:
 
 # COMMAND ----------
 
+# DBTITLE 1,Summary and Key Takeaways
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Summary & Key Takeaways
@@ -1661,7 +1841,7 @@ else:
 # MAGIC ```
 # MAGIC Level 0          Level 1              Level 2              Level 3
 # MAGIC Manual            Automated            CI/CD                Full MLOps
-# MAGIC ─────────────────────────────────────────────────────────────────────
+# MAGIC ─────────────────────────────────────────────────────────────────
 # MAGIC - Notebooks       - MLflow tracking    - DABs bundles       - A/B testing
 # MAGIC - No versioning   - Model registry     - Git integration    - Auto-retraining
 # MAGIC - Copy/paste      - Basic serving      - Multi-environment  - Drift alerts
@@ -1678,6 +1858,7 @@ else:
 
 # COMMAND ----------
 
+# DBTITLE 1,Cleanup (Optional)
 # MAGIC %md
 # MAGIC ## Cleanup (Optional)
 # MAGIC
@@ -1686,6 +1867,7 @@ else:
 
 # COMMAND ----------
 
+# DBTITLE 1,Delete Serving Endpoint
 # # ── Uncomment to delete the serving endpoint ──────────────────
 # try:
 #     w.serving_endpoints.delete(endpoint_name)

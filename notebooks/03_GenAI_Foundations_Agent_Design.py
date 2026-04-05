@@ -1,7 +1,5 @@
 # Databricks notebook source
-
-# COMMAND ----------
-
+# DBTITLE 1,Module 3: GenAI Foundations and Agent Design
 # MAGIC %md
 # MAGIC # Module 3: GenAI Foundations & Agent System Design
 # MAGIC
@@ -25,31 +23,47 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Setup and Configuration
 # MAGIC %md
 # MAGIC ## Setup & Configuration
 
 # COMMAND ----------
 
+# DBTITLE 1,Install Vector Search SDK
+# MAGIC %pip install databricks-vectorsearch openai databricks-sdk --quiet
+
+# COMMAND ----------
+
+# DBTITLE 1,Restart Python after SDK install
+dbutils.library.restartPython()
+
+# COMMAND ----------
+
+# DBTITLE 1,Run Config File
 # MAGIC %run ./_config
 
 # COMMAND ----------
 
+# DBTITLE 1,Activate Training Namespace
 # MAGIC %md
 # MAGIC Activate the training catalog and schema from our shared configuration.
 
 # COMMAND ----------
 
+# DBTITLE 1,Set Active Catalog and Schema
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"USE SCHEMA {schema}")
 print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Verify GTM Tables from Morning Session
 # MAGIC %md
 # MAGIC Verify that the GTM data tables created in Notebook 00 are available. If any tables show "NOT FOUND", re-run Notebook 00 first.
 
 # COMMAND ----------
 
+# DBTITLE 1,Check Table Row Counts
 # Verify our GTM data is available from the morning session
 tables = ["gtm_accounts", "gtm_contacts", "gtm_opportunities", "gtm_activities",
           "gtm_campaigns", "gtm_campaign_members", "gtm_lead_scores", "gtm_knowledge_base"]
@@ -64,6 +78,7 @@ for t in tables:
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 1: From Prompts to Autonomous Agents
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 1: From Prompts to Autonomous Agents
@@ -74,7 +89,7 @@ for t in tables:
 # MAGIC complexity spectrum is the first — and most important — design decision.
 # MAGIC
 # MAGIC ```
-# MAGIC  Complexity & Autonomy ──────────────────────────────────────────────────────────►
+# MAGIC  Complexity & Autonomy ────────────────────────────────────────────────────────────────►
 # MAGIC
 # MAGIC  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
 # MAGIC  │              │   │              │   │              │   │              │   │              │
@@ -89,7 +104,7 @@ for t in tables:
 # MAGIC                       then draft"         company            analyze data"       to handle
 # MAGIC                                           docs"                                  complex
 # MAGIC                                                                                  workflows"
-# MAGIC  ─────────────────────────────────────────────────────────────────────────────────────────────
+# MAGIC  ─────────────────────────────────────────────────────────────────────────────────────────
 # MAGIC  Low latency                                                              Higher latency
 # MAGIC  Deterministic                                                            More autonomous
 # MAGIC  Easy to test                                                             Harder to test
@@ -117,6 +132,7 @@ for t in tables:
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 2: Foundation Models and Prompt Engineering
 # MAGIC %md
 # MAGIC # Section 2: Foundation Models & Prompt Engineering
 # MAGIC
@@ -132,19 +148,23 @@ for t in tables:
 # MAGIC | GPT 5.4 | `databricks-gpt-5-4` | Advanced reasoning |
 # MAGIC | Claude Sonnet 4.6 | `databricks-claude-sonnet-4-6` | Analysis, writing |
 # MAGIC | GTE-Large-EN | `databricks-gte-large-en` | Text embeddings |
-# MAGIC
 
 # COMMAND ----------
 
+# DBTITLE 1,Your First Foundation Model API Call
 # MAGIC %md
 # MAGIC ### 2.1 — Your First Foundation Model API Call
 
 # COMMAND ----------
 
-# MAGIC %pip install openai databricks-sdk --quiet
+# DBTITLE 1,Install OpenAI and Databricks SDK
+# openai and databricks-sdk were installed in the Setup cell at the top of this notebook.
+# No additional install needed here.
+print("✅ openai and databricks-sdk already installed (see Setup cells at top of notebook)")
 
 # COMMAND ----------
 
+# DBTITLE 1,Environment Fix: typing_extensions
 # MAGIC %md
 # MAGIC #### Environment Fix -- typing_extensions
 # MAGIC On Databricks serverless compute, the pre-installed `typing_extensions` version can conflict with the OpenAI SDK.
@@ -152,6 +172,7 @@ for t in tables:
 
 # COMMAND ----------
 
+# DBTITLE 1,Fix typing_extensions Path Precedence
 # Fix typing_extensions path precedence on serverless compute
 import subprocess, sys
 subprocess.check_call([sys.executable, "-m", "pip", "install", "typing_extensions>=4.5", "--target", "/tmp/pip_overrides", "--upgrade", "--quiet"])
@@ -166,10 +187,12 @@ importlib.reload(typing_extensions)
 
 # COMMAND ----------
 
+# DBTITLE 1,Reload Config After Library Install
 # MAGIC %run ./_config
 
 # COMMAND ----------
 
+# DBTITLE 1,Call Foundation Model via OpenAI SDK
 from openai import OpenAI
 
 # Create the client pointing to Databricks Model Serving
@@ -192,6 +215,7 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# DBTITLE 1,Prompt Engineering Techniques Overview
 # MAGIC %md
 # MAGIC ### 2.2 — Prompt Engineering Techniques
 # MAGIC
@@ -200,12 +224,14 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# DBTITLE 1,Technique 1: Zero-Shot Classification
 # MAGIC %md
 # MAGIC #### Technique 1: Zero-Shot Classification
 # MAGIC (Zero-shot = no examples provided; the model relies entirely on its training knowledge.)
 
 # COMMAND ----------
 
+# DBTITLE 1,Zero-Shot Lead Classification
 # Zero-shot: Classify a lead based on a description
 lead_description = """
 Sarah Chen, VP of Engineering at a Fortune 500 financial services company.
@@ -238,6 +264,7 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# DBTITLE 1,Technique 2: Few-Shot Extraction
 # MAGIC %md
 # MAGIC #### Technique 2: Few-Shot Extraction
 # MAGIC (Few-shot = a handful of input/output examples teach the model the desired format.)
@@ -245,6 +272,7 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# DBTITLE 1,Few-Shot Sales Note Extraction
 # Few-shot: Extract key information from sales notes
 sales_notes = """
 Had a great call with Mike Rodriguez (CTO) at Acme Corp today. They're running
@@ -300,12 +328,14 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# DBTITLE 1,Technique 3: Chain-of-Thought Reasoning
 # MAGIC %md
 # MAGIC #### Technique 3: Chain-of-Thought Reasoning
 # MAGIC By asking the model to "think step by step," we get more accurate and explainable results.
 
 # COMMAND ----------
 
+# DBTITLE 1,Chain-of-Thought Deal Analysis
 # Chain-of-thought: Analyze a deal and recommend next steps
 deal_info = """
 Deal: Enterprise Data Platform — TechGlobal Inc.
@@ -347,12 +377,14 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# DBTITLE 1,Technique 4: System Prompts for Persona
 # MAGIC %md
 # MAGIC #### Technique 4: System Prompts for Persona Setting
 # MAGIC System prompts set the behavior, tone, and constraints for the model across an entire conversation.
 
 # COMMAND ----------
 
+# DBTITLE 1,System Prompt GTM Analyst Persona
 # System prompt: Create a specialized GTM analyst persona
 response = client.chat.completions.create(
     model="databricks-meta-llama-3-3-70b-instruct",
@@ -387,6 +419,7 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# DBTITLE 1,AI Playground: Interactive Model Testing
 # MAGIC %md
 # MAGIC ### 2.3 — AI Playground
 # MAGIC
@@ -406,6 +439,7 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 3: Data Engineering for RAG
 # MAGIC %md
 # MAGIC # Section 3: Data Engineering for RAG — Vector Search
 # MAGIC
@@ -438,16 +472,19 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# DBTITLE 1,Explore the Knowledge Base
 # MAGIC %md
 # MAGIC ### 3.1 — Explore the Knowledge Base
 
 # COMMAND ----------
 
+# DBTITLE 1,Knowledge Base Table Description
 # MAGIC %md
 # MAGIC Let's examine the knowledge base table we generated in Notebook 00. These documents -- product playbooks, competitive intel, best practices -- will power our RAG (Retrieval-Augmented Generation) system.
 
 # COMMAND ----------
 
+# DBTITLE 1,Load and Inspect Knowledge Base
 # Let's look at our GTM knowledge base — this is what we'll make searchable via RAG
 knowledge_df = spark.sql(f"SELECT * FROM {catalog}.{schema}.gtm_knowledge_base")
 print(f"Total documents: {knowledge_df.count()}")
@@ -456,6 +493,7 @@ knowledge_df.printSchema()
 
 # COMMAND ----------
 
+# DBTITLE 1,Show Document Distribution by Category
 # Show the distribution of documents by category
 display(
     spark.sql(f"""
@@ -468,6 +506,7 @@ display(
 
 # COMMAND ----------
 
+# DBTITLE 1,Preview Knowledge Base Documents
 # Preview a few documents to understand the content
 display(
     spark.sql(f"""
@@ -481,6 +520,7 @@ display(
 
 # COMMAND ----------
 
+# DBTITLE 1,Enable Change Data Feed for Delta Sync
 # MAGIC %md
 # MAGIC ### 3.2 — Enable Change Data Feed
 # MAGIC
@@ -489,6 +529,7 @@ display(
 
 # COMMAND ----------
 
+# DBTITLE 1,Enable CDF on Knowledge Base Table
 # Enable Change Data Feed on the source table
 spark.sql(f"""
     ALTER TABLE {catalog}.{schema}.gtm_knowledge_base
@@ -499,6 +540,7 @@ print(f"Change Data Feed enabled on {catalog}.{schema}.gtm_knowledge_base")
 
 # COMMAND ----------
 
+# DBTITLE 1,Generate Embeddings with AI Functions
 # MAGIC %md
 # MAGIC ### 3.3 — Generate Embeddings with AI Functions
 # MAGIC
@@ -510,6 +552,7 @@ print(f"Change Data Feed enabled on {catalog}.{schema}.gtm_knowledge_base")
 
 # COMMAND ----------
 
+# DBTITLE 1,Create Embeddings Table via ai_query
 # Create the embeddings table using ai_query — this runs the embedding model on every row
 spark.sql(f"""
     CREATE OR REPLACE TABLE {catalog}.{schema}.gtm_knowledge_embeddings AS
@@ -525,6 +568,7 @@ print(f"Embeddings table created: {catalog}.{schema}.gtm_knowledge_embeddings")
 
 # COMMAND ----------
 
+# DBTITLE 1,Verify Embedding Dimensions
 # Verify the embeddings
 embeddings_df = spark.sql(f"""
     SELECT doc_id, title, category,
@@ -536,6 +580,7 @@ display(embeddings_df)
 
 # COMMAND ----------
 
+# DBTITLE 1,Create a Vector Search Index
 # MAGIC %md
 # MAGIC ### 3.4 — Create a Vector Search Index
 # MAGIC
@@ -547,6 +592,7 @@ display(embeddings_df)
 
 # COMMAND ----------
 
+# DBTITLE 1,Configure Vector Search Endpoint
 from databricks.sdk import WorkspaceClient
 
 w = WorkspaceClient()
@@ -562,11 +608,13 @@ print(f"Source Table:           {source_table}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Check Vector Search Endpoint Status
 # MAGIC %md
 # MAGIC Check that the Vector Search endpoint is provisioned and ready to serve queries.
 
 # COMMAND ----------
 
+# DBTITLE 1,Verify Endpoint is Online
 # Check the endpoint status
 try:
     endpoint = w.vector_search_endpoints.get_endpoint(vs_endpoint_name)
@@ -576,38 +624,39 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,Create Delta Sync Vector Search Index
 # Create the Delta Sync vector search index
-# This will automatically compute embeddings using the specified model
+# This will automatically compute embeddings using the specified model endpoint
+
+from databricks.vector_search.client import VectorSearchClient
+import time
+
+vs_client = VectorSearchClient()
 
 try:
     # First, try to delete any existing index with the same name
     try:
-        w.vector_search_indexes.delete_index(vs_index_name)
+        vs_client.delete_index(endpoint_name=vs_endpoint_name, index_name=vs_index_name)
         print(f"Deleted existing index: {vs_index_name}")
-        import time
         time.sleep(5)
     except Exception:
         pass  # Index doesn't exist yet — that's fine
 
-    # Create a new Delta Sync index
-    index = w.vector_search_indexes.create_index(
-        name=vs_index_name,
+    # Create a new Delta Sync index with Databricks-managed embeddings
+    index = vs_client.create_delta_sync_index(
         endpoint_name=vs_endpoint_name,
+        source_table_name=source_table,
+        index_name=vs_index_name,
+        pipeline_type="TRIGGERED",
         primary_key="doc_id",
-        index_type="DELTA_SYNC",
-        delta_sync_index_spec={
-            "source_table": source_table,
-            "pipeline_type": "TRIGGERED",
-            "embedding_source_columns": [
-                {
-                    "name": "content",
-                    "embedding_model_endpoint_name": "databricks-gte-large-en"
-                }
-            ]
-        }
+        embedding_source_column="content",
+        embedding_model_endpoint_name="databricks-gte-large-en"
     )
-    print(f"Vector Search index created: {vs_index_name}")
-    print(f"The index will sync automatically. Initial sync may take a few minutes.")
+
+    print(f"✅ Vector Search index created: {vs_index_name}")
+    print(f"   Source table: {source_table}")
+    print(f"   Embedding model: databricks-gte-large-en")
+    print(f"\nThe index will sync automatically. Initial sync may take a few minutes.")
 
 except Exception as e:
     print(f"Note: {e}")
@@ -615,10 +664,7 @@ except Exception as e:
 
 # COMMAND ----------
 
-# MAGIC %md
-
-# COMMAND ----------
-
+# DBTITLE 1,Poll Index Sync Status
 # Check the index sync status
 import time
 
@@ -645,6 +691,7 @@ check_index_status(vs_index_name, max_wait_seconds=180)
 
 # COMMAND ----------
 
+# DBTITLE 1,Query the Vector Search Index
 # MAGIC %md
 # MAGIC ### 3.5 — Query the Vector Search Index
 # MAGIC
@@ -655,6 +702,7 @@ check_index_status(vs_index_name, max_wait_seconds=180)
 
 # COMMAND ----------
 
+# DBTITLE 1,Semantic Search: Pricing Objections
 # Test similarity search
 try:
     results = w.vector_search_indexes.query_index(
@@ -682,6 +730,7 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,Semantic Search: Migration Requirements
 # Let's try another search to show the versatility
 try:
     results = w.vector_search_indexes.query_index(
@@ -704,6 +753,7 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 4: Equipping Agents with Tools
 # MAGIC %md
 # MAGIC ---
 # MAGIC Having built the retrieval infrastructure, let's now create the reusable tools an agent will invoke at runtime.
@@ -723,11 +773,13 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,Tool 1: Structured Data Retrieval
 # MAGIC %md
 # MAGIC ### 4.1 — Tool 1: Structured Data Retrieval (SQL)
 
 # COMMAND ----------
 
+# DBTITLE 1,Define Tool 1: Query Accounts
 def query_accounts_tool(industry: str = None, min_revenue: float = None,
                          account_tier: str = None, region: str = None,
                          limit: int = 10) -> str:
@@ -784,6 +836,7 @@ def query_accounts_tool(industry: str = None, min_revenue: float = None,
 
 # COMMAND ----------
 
+# DBTITLE 1,Test Tool 1: Enterprise Technology Accounts
 # Test Tool 1
 print("TEST: Enterprise Technology accounts with revenue > $500M")
 print("=" * 60)
@@ -791,17 +844,20 @@ print(query_accounts_tool(industry="Technology", account_tier="Enterprise"))
 
 # COMMAND ----------
 
+# DBTITLE 1,Test Tool 1: EMEA Accounts
 print("\nTEST: All accounts in EMEA")
 print("=" * 60)
 print(query_accounts_tool(region="EMEA", limit=5))
 
 # COMMAND ----------
 
+# DBTITLE 1,Tool 2: Unstructured Retrieval via Vector Search
 # MAGIC %md
 # MAGIC ### 4.2 — Tool 2: Unstructured Retrieval (Vector Search)
 
 # COMMAND ----------
 
+# DBTITLE 1,Define Tool 2: Search Knowledge Base
 def search_knowledge_base(query: str, num_results: int = 3, category: str = None) -> str:
     """
     Search the GTM knowledge base using Vector Search for semantically relevant documents.
@@ -848,6 +904,7 @@ def search_knowledge_base(query: str, num_results: int = 3, category: str = None
 
 # COMMAND ----------
 
+# DBTITLE 1,Test Tool 2: Competitive Positioning
 # Test Tool 2 — semantic search
 print("TEST: Searching for 'competitive positioning against Snowflake'")
 print("=" * 60)
@@ -855,17 +912,20 @@ print(search_knowledge_base("competitive positioning against Snowflake"))
 
 # COMMAND ----------
 
+# DBTITLE 1,Test Tool 2: Pricing and Packaging
 print("\nTEST: Searching for 'pricing and packaging'")
 print("=" * 60)
 print(search_knowledge_base("pricing and packaging"))
 
 # COMMAND ----------
 
+# DBTITLE 1,Tool 3: Pipeline Analytics
 # MAGIC %md
 # MAGIC ### 4.3 — Tool 3: Data Analysis (Pipeline Analytics)
 
 # COMMAND ----------
 
+# DBTITLE 1,Define Tool 3: Pipeline Analysis
 def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
     """
     Analyze the sales pipeline and return summary insights.
@@ -881,14 +941,16 @@ def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
         # Stage-level summary
         stage_filter = f"WHERE stage = '{stage}'" if stage else ""
 
+        # NOTE: probability is stored as a decimal (0.0 – 1.0), e.g. 0.7 = 70%.
+        # We multiply by 100 for display and use the raw value for weighted calcs.
         summary_query = f"""
             SELECT
                 stage,
                 COUNT(*) as deal_count,
                 ROUND(SUM(amount), 0) as total_amount,
                 ROUND(AVG(amount), 0) as avg_deal_size,
-                ROUND(AVG(probability), 1) as avg_probability,
-                ROUND(SUM(amount * probability / 100), 0) as weighted_pipeline  -- Weighted Pipeline = Deal Amount x Probability — realistic expected revenue
+                ROUND(AVG(probability) * 100, 1) as avg_probability,
+                ROUND(SUM(amount * probability), 0) as weighted_pipeline
             FROM {catalog}.{schema}.gtm_opportunities
             {stage_filter}
             GROUP BY stage
@@ -905,7 +967,7 @@ def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
             SELECT
                 COUNT(*) as total_deals,
                 ROUND(SUM(amount), 0) as total_pipeline,
-                ROUND(SUM(amount * probability / 100), 0) as weighted_pipeline,
+                ROUND(SUM(amount * probability), 0) as weighted_pipeline,
                 ROUND(AVG(amount), 0) as avg_deal_size
             FROM {catalog}.{schema}.gtm_opportunities
             {stage_filter}
@@ -937,7 +999,8 @@ def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
         # If details requested and stage filter applied, show individual deals
         if include_details and stage:
             detail_query = f"""
-                SELECT o.opportunity_id, a.company_name, o.amount, o.probability, o.close_date
+                SELECT o.opportunity_id, a.company_name, o.amount,
+                       ROUND(o.probability * 100, 0) as probability_pct, o.close_date
                 FROM {catalog}.{schema}.gtm_opportunities o
                 JOIN {catalog}.{schema}.gtm_accounts a ON o.account_id = a.account_id
                 WHERE o.stage = '{stage}'
@@ -952,7 +1015,7 @@ def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
                 output_lines.append(
                     f"  {row['company_name']:<30} | "
                     f"${row['amount']:>12,.0f} | "
-                    f"Prob: {row['probability']}% | "
+                    f"Prob: {int(row['probability_pct'])}% | "
                     f"Close: {row['close_date']}"
                 )
 
@@ -962,18 +1025,21 @@ def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
 
 # COMMAND ----------
 
+# DBTITLE 1,Test Tool 3: Full Pipeline Analysis
 # Test Tool 3 — full pipeline overview
 print("TEST: Full pipeline analysis")
 print(analyze_pipeline())
 
 # COMMAND ----------
 
+# DBTITLE 1,Test Tool 3: Negotiation Stage Details
 # Test Tool 3 — specific stage with details
 print("\nTEST: Negotiation stage with deal details")
 print(analyze_pipeline(stage="Negotiation", include_details=True))
 
 # COMMAND ----------
 
+# DBTITLE 1,Quick End-to-End RAG Test
 # MAGIC %md
 # MAGIC ### 4.4 — Quick End-to-End RAG Test
 # MAGIC
@@ -981,6 +1047,7 @@ print(analyze_pipeline(stage="Negotiation", include_details=True))
 
 # COMMAND ----------
 
+# DBTITLE 1,RAG Flow: Retrieve Context and Generate Answer
 # A simple RAG flow: retrieve context, then generate an answer
 user_question = "What's the best approach for selling to financial services companies?"
 
@@ -1017,6 +1084,7 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 5: Agent Bricks and MCP
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 5: Agent Bricks & Model Context Protocol (MCP)
@@ -1028,7 +1096,7 @@ print(response.choices[0].message.content)
 # MAGIC so instead of building every agent capability yourself, you compose agents from these building blocks:
 # MAGIC
 # MAGIC ```
-# MAGIC  ┌─────────────────────────────────────────────────────────────────────┐
+# MAGIC  ┌───────────────────────────────────────────────────────────────────┐
 # MAGIC  │                    Your Custom Agent                                │
 # MAGIC  │                                                                     │
 # MAGIC  │   ┌───────────────┐  ┌───────────────┐  ┌───────────────┐         │
@@ -1050,7 +1118,7 @@ print(response.choices[0].message.content)
 # MAGIC  │   │               │  │   tools"      │  │   services"   │         │
 # MAGIC  │   └───────────────┘  └───────────────┘  └───────────────┘         │
 # MAGIC  │                                                                     │
-# MAGIC  └─────────────────────────────────────────────────────────────────────┘
+# MAGIC  └───────────────────────────────────────────────────────────────────┘
 # MAGIC ```
 # MAGIC
 # MAGIC ### Available Agent Bricks
@@ -1073,6 +1141,7 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# DBTITLE 1,Model Context Protocol Overview
 # MAGIC %md
 # MAGIC ## 5.2 — Model Context Protocol (MCP)
 # MAGIC
@@ -1141,6 +1210,7 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# DBTITLE 1,Summary: What We Built in Module 3
 # MAGIC %md
 # MAGIC ---
 # MAGIC ## Summary: What We Built in Module 3
@@ -1149,7 +1219,7 @@ print(response.choices[0].message.content)
 # MAGIC |-----------|--------|--------------|
 # MAGIC | Foundation Model API | Tested | Call LLMs with OpenAI-compatible SDK |
 # MAGIC | Prompt Engineering | 4 techniques | Zero-shot, few-shot, CoT, system prompts |
-# MAGIC | Vector Search Index | Created | Semantic search over 50+ GTM documents |
+# MAGIC | Vector Search Index | Created | Semantic search over 45 GTM documents |
 # MAGIC | SQL Query Tool | Built | Query accounts by industry, revenue, tier |
 # MAGIC | Knowledge Search Tool | Built | Semantic retrieval from knowledge base |
 # MAGIC | Pipeline Analysis Tool | Built | Analyze deals by stage with metrics |

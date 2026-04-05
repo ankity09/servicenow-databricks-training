@@ -1,5 +1,4 @@
 # Databricks notebook source
-
 # MAGIC %md
 # MAGIC # Module 0: Environment Setup & GTM Data Generation
 # MAGIC
@@ -94,7 +93,7 @@ def random_dates(start, end, n):
 # MAGIC
 # MAGIC Now we'll build the synthetic dataset. The order matters: **accounts** (companies) are the root entity,
 # MAGIC **contacts** belong to accounts, **opportunities** (deals) link to accounts, and **activities** (emails, calls, meetings)
-# MAGIC connect to contacts. This mirrors a real CRM like ServiceNow or Salesforce.
+# MAGIC connect to contacts. This mirrors a real CRM like Salesforce.
 
 # COMMAND ----------
 

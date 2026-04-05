@@ -1,7 +1,4 @@
 # Databricks notebook source
-
-# COMMAND ----------
-
 # MAGIC %md
 # MAGIC # Module 4: Custom Agent Development, Evaluation & Governance
 # MAGIC
