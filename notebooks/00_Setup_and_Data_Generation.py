@@ -689,7 +689,8 @@ for t in tables:
     total += count
     print(f"  {t:<30} {count:>6} rows")
 
-print(f"  {'\u2500' * 40}")
+hr = '─' * 40
+print(f"  {hr}")
 print(f"  {'TOTAL':<30} {total:>6} rows")
 print(f"\n  Conversion rate: {spark.sql(f'SELECT AVG(converted) FROM {catalog}.{schema}.gtm_lead_scores').first()[0]:.1%}")
 
