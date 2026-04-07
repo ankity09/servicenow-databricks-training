@@ -767,7 +767,8 @@ print(f"\nTotal: {len(all_tools)} tools from {len(mcp_servers)} MCP servers")
 # DBTITLE 1,3.1 — Define MCPToolCallingAgent
 import mlflow
 from mlflow.entities import SpanType
-from mlflow.pyfunc import ResponsesAgent, ResponsesAgentRequest, ResponsesAgentResponse, ResponsesAgentStreamEvent
+from mlflow.pyfunc import ResponsesAgent
+from mlflow.types.responses import ResponsesAgentRequest, ResponsesAgentResponse, ResponsesAgentStreamEvent
 from databricks_openai import DatabricksOpenAI, McpServerToolkit
 import json
 
@@ -939,7 +940,8 @@ agent_code_dir = tempfile.mkdtemp(prefix="mcp_agent_code_")
 agent_code = textwrap.dedent(f'''
 import mlflow
 from mlflow.entities import SpanType
-from mlflow.pyfunc import ResponsesAgent, ResponsesAgentRequest, ResponsesAgentResponse, ResponsesAgentStreamEvent
+from mlflow.pyfunc import ResponsesAgent
+from mlflow.types.responses import ResponsesAgentRequest, ResponsesAgentResponse, ResponsesAgentStreamEvent
 from databricks_openai import DatabricksOpenAI, McpServerToolkit
 from databricks.sdk import WorkspaceClient
 import json
