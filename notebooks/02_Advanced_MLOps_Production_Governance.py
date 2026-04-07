@@ -635,7 +635,7 @@ import os
 mlflow.set_registry_uri("databricks-uc")
 mlflow.set_experiment(f"/Users/{username}/servicenow_lead_scoring")
 
-model_name = f"{catalog}.{schema}.lead_scoring_model"
+model_name = f"{catalog}.{schema}.lead_scoring_{user_prefix}"
 
 # COMMAND ----------
 
@@ -918,7 +918,7 @@ from databricks.sdk.service.serving import (
 import time
 
 w = WorkspaceClient()
-endpoint_name = "servicenow-lead-scoring"
+endpoint_name = serving_endpoint_name  # from _config.py — unique per user
 
 # COMMAND ----------
 
