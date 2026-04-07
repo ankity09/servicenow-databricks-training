@@ -22,3 +22,6 @@ Thumbs.db
 
 # Databricks
 .databricks/
+
+# Instructor walkthrough (not shared with trainees)
+Module_03_Instructor_Walkthrough.md
