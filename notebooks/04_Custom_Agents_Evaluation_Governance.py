@@ -879,13 +879,30 @@ Guidelines:
                     messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
             else:
                 # Final response — no more tool calls
-                return ResponsesAgentResponse(output=msg.content or "")
+                text = msg.content or ""
+                return ResponsesAgentResponse(output=self._text_to_output(text))
 
-        return ResponsesAgentResponse(output="Agent reached maximum iterations.")
+        return ResponsesAgentResponse(output=self._text_to_output("Agent reached maximum iterations."))
+
+    @staticmethod
+    def _text_to_output(text: str) -> list:
+        """Convert a text string to the Responses API output item format."""
+        from uuid import uuid4
+        return [{"type": "message", "id": f"msg_{uuid4().hex[:8]}",
+                 "role": "assistant", "content": [{"type": "output_text", "text": text}]}]
+
+    @staticmethod
+    def get_text(response: ResponsesAgentResponse) -> str:
+        """Helper to extract text from a ResponsesAgentResponse."""
+        for item in response.output:
+            if isinstance(item, dict) and item.get("type") == "message":
+                for block in item.get("content", []):
+                    if isinstance(block, dict) and block.get("type") == "output_text":
+                        return block.get("text", "")
+        return str(response.output)
 
     def predict_stream(self, request: ResponsesAgentRequest):
         """Streaming version — yields events as they occur."""
-        # For simplicity, we delegate to predict and yield the final result
         result = self.predict(request)
         yield ResponsesAgentStreamEvent(data={"output": result.output})
 
@@ -907,7 +924,7 @@ result = agent.predict(
 
 print("AGENT RESPONSE:")
 print("=" * 60)
-print(result.output)
+print(MCPToolCallingAgent.get_text(result))
 
 # COMMAND ----------
 
@@ -919,7 +936,7 @@ result = agent.predict(
 
 print("MULTI-TOOL RESPONSE:")
 print("=" * 60)
-print(result.output)
+print(MCPToolCallingAgent.get_text(result))
 
 # COMMAND ----------
 
@@ -1031,8 +1048,15 @@ Use tools to gather data before answering. Be concise, cite your sources, and fo
                     result = self.execute_tool(tc.function.name, args)
                     messages.append({{"role": "tool", "tool_call_id": tc.id, "content": result}})
             else:
-                return ResponsesAgentResponse(output=msg.content or "")
-        return ResponsesAgentResponse(output="Agent reached maximum iterations.")
+                text = msg.content or ""
+                return ResponsesAgentResponse(output=MCPToolCallingAgent._text_to_output(text))
+        return ResponsesAgentResponse(output=MCPToolCallingAgent._text_to_output("Agent reached maximum iterations."))
+
+    @staticmethod
+    def _text_to_output(text):
+        from uuid import uuid4
+        return [{{"type": "message", "id": f"msg_{{uuid4().hex[:8]}}",
+                 "role": "assistant", "content": [{{"type": "output_text", "text": text}}]}}]
 
     def predict_stream(self, request: ResponsesAgentRequest):
         result = self.predict(request)
@@ -1345,7 +1369,7 @@ def guarded_agent_call(user_message: str) -> str:
         ResponsesAgentRequest(input=[{"role": "user", "content": user_message}])
     )
 
-    response = result.output
+    response = MCPToolCallingAgent.get_text(result)
 
     # --- OUTPUT GUARDRAILS ---
     import re
@@ -1422,7 +1446,7 @@ traced_result = agent.predict(
 
 print("TRACED RESPONSE:")
 print("=" * 60)
-print(traced_result.output)
+print(MCPToolCallingAgent.get_text(traced_result))
 
 # COMMAND ----------
 
@@ -1532,7 +1556,7 @@ from mlflow.genai.scorers import RelevanceToQuery, Safety
 def predict_fn(inputs):
     """Wrapper for the agent that mlflow.genai.evaluate can call."""
     result = agent.predict(ResponsesAgentRequest(input=inputs))
-    return result.output
+    return MCPToolCallingAgent.get_text(result)
 
 try:
     with mlflow.start_run(run_name="agent_eval_genai_v1"):
@@ -1586,8 +1610,9 @@ for i, row in eval_df.iterrows():
 
     try:
         result = agent.predict(ResponsesAgentRequest(input=row["inputs"]))
-        eval_predictions.append(result.output)
-        print(f"          Response length: {len(result.output)} chars")
+        text = MCPToolCallingAgent.get_text(result)
+        eval_predictions.append(text)
+        print(f"          Response length: {len(text)} chars")
     except Exception as e:
         eval_predictions.append(f"Error: {str(e)}")
         print(f"          Error: {str(e)[:60]}")
