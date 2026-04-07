@@ -8,14 +8,15 @@ A one-day, hands-on workshop covering distributed ML, production MLOps, GenAI fo
 
 | Time | Module | Notebook | Topics |
 |------|--------|----------|--------|
-| 9:00 – 9:30 | **Setup** | `00_Setup_and_Data_Generation` | Environment setup, synthetic GTM data generation |
-| 9:30 – 11:00 | **Module 1** | `01_Spark_Architecture_Distributed_Training` | Spark execution plans, Spark ML pipelines, Pandas API on Spark, Pandas UDFs |
-| 11:00 – 11:15 | *Break* | | |
-| 11:15 – 12:45 | **Module 2** | `02_Advanced_MLOps_Production_Governance` | Hyperopt tuning, MLflow tracking, Unity Catalog model registry, Model Serving, monitoring |
-| 12:45 – 1:45 | *Lunch* | | |
-| 1:45 – 3:15 | **Module 3** | `03_GenAI_Foundations_Agent_Design` | Foundation Model APIs, prompt engineering, Vector Search, agent tools, Agent Bricks & MCP |
-| 3:15 – 3:30 | *Break* | | |
-| 3:30 – 5:00 | **Module 4** | `04_Custom_Agents_Evaluation_Governance` | Custom agents (OpenAI SDK), MLflow ResponsesAgent, AI Gateway, tracing, LLM-as-judge evaluation |
+| 9:30 am – 10:00 am | **Setup** | `00_Setup_and_Data_Generation` | Environment setup, synthetic GTM data generation |
+| 10:00 am – 11:30 am | **Module 1** | `01_Spark_Architecture_Distributed_Training` | Spark execution plans, Spark ML pipelines, Pandas API on Spark, Pandas UDFs |
+| 11:30 am – 11:45 am | *Break* | | |
+| 11:45 am – 1:15 pm | **Module 2** | `02_Advanced_MLOps_Production_Governance` | Hyperopt tuning, MLflow tracking, Unity Catalog model registry, Model Serving, monitoring |
+| 1:15 pm – 2:00 pm | *Lunch* | | |
+| 2:00 pm – 3:30 pm | **Module 3** | `03_GenAI_Foundations_Agent_Design` | Foundation Model APIs, prompt engineering, Vector Search, agent tools, Agent Bricks & MCP |
+| 3:30 pm – 3:45 pm | *Break* | | |
+| 3:45 pm – 5:00 pm | **Module 4** | `04_Custom_Agents_Evaluation_Governance` | Custom agents (OpenAI SDK), MLflow Responses Agent, AI Gateway, tracing, LLM-as-judge evaluation |
+| 5:00 pm – 5:15 pm | **Wrap Up** | | Review, Q&A, next steps |
 
 ---
 

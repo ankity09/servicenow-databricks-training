@@ -1,4 +1,5 @@
 # Databricks notebook source
+# DBTITLE 1,Module 4 Overview
 # MAGIC %md
 # MAGIC # Module 4: Custom Agent Development, Evaluation & Governance
 # MAGIC
@@ -27,35 +28,42 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Setup and Configuration
 # MAGIC %md
 # MAGIC ## Setup & Configuration
 
 # COMMAND ----------
 
+# DBTITLE 1,Load Shared Configuration
 # MAGIC %run ./_config
 
 # COMMAND ----------
 
+# DBTITLE 1,Activate Catalog and Schema
 # MAGIC %md
 # MAGIC Activate the training catalog and schema from our shared configuration.
 
 # COMMAND ----------
 
+# DBTITLE 1,Set Active Catalog and Schema
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"USE SCHEMA {schema}")
 print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Install Required Libraries
 # MAGIC %md
 # MAGIC ### Install Required Libraries
 
 # COMMAND ----------
 
-# MAGIC %pip install mlflow openai databricks-sdk --quiet
+# DBTITLE 1,Install Python Dependencies
+# MAGIC %pip install mlflow openai databricks-sdk tiktoken --quiet
 
 # COMMAND ----------
 
+# DBTITLE 1,Environment Fix — typing_extensions
 # MAGIC %md
 # MAGIC #### Environment Fix -- typing_extensions
 # MAGIC On Databricks serverless compute, the pre-installed `typing_extensions` version can conflict with the OpenAI SDK.
@@ -63,24 +71,13 @@ print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Fix typing_extensions Conflict
 # Fix typing_extensions conflict on serverless compute:
 # The system typing_extensions is too old for openai/pydantic but takes precedence on sys.path.
-# We overwrite the system copy with a newer version so all imports find it correctly.
-import subprocess, sys, importlib, shutil, glob as globmod
+# We install a newer version directly into the environment (--target /tmp fails on serverless).
+import subprocess, sys, importlib
 
-# Install to a temp location
-subprocess.check_call([sys.executable, "-m", "pip", "install", "typing_extensions>=4.12", "--target", "/tmp/te_fix", "--quiet", "--no-deps"])
-
-# Find the system typing_extensions location and overwrite it
-system_te = "/databricks/python/lib/python3.10/site-packages/typing_extensions.py"
-new_te = "/tmp/te_fix/typing_extensions.py"
-try:
-    shutil.copy2(new_te, system_te)
-    print(f"Replaced system typing_extensions with newer version")
-except PermissionError:
-    # If system path is read-only, prepend to sys.path instead
-    sys.path.insert(0, "/tmp/te_fix")
-    print(f"Added /tmp/te_fix to sys.path (system path is read-only)")
+subprocess.check_call([sys.executable, "-m", "pip", "install", "typing_extensions>=4.12", "--upgrade", "--quiet"])
 
 # Clear cached modules
 mods_to_remove = [k for k in sys.modules if k == "typing_extensions" or k.startswith("typing_extensions.")]
@@ -96,20 +93,24 @@ print("typing_extensions fix verified successfully")
 
 # COMMAND ----------
 
+# DBTITLE 1,Reload Configuration After Install
 # MAGIC %run ./_config
 
 # COMMAND ----------
 
+# DBTITLE 1,Post-Install Configuration Note
 # MAGIC %md
 # MAGIC After the library install (which restarts the Python process), reload configuration.
 
 # COMMAND ----------
 
+# DBTITLE 1,Reactivate Catalog and Schema
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"USE SCHEMA {schema}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Redefine Agent Tools
 # MAGIC %md
 # MAGIC ### Redefine Agent Tools
 # MAGIC
@@ -118,17 +119,20 @@ spark.sql(f"USE SCHEMA {schema}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Import Core Libraries
 from databricks.sdk import WorkspaceClient
 from openai import OpenAI
 import json
 
 # COMMAND ----------
 
+# DBTITLE 1,Initialize OpenAI Client
 # MAGIC %md
 # MAGIC Initialize the OpenAI-compatible client (pointed at Databricks' Foundation Model API) and the Vector Search index created in Notebook 03.
 
 # COMMAND ----------
 
+# DBTITLE 1,Configure API Client and VS Index
 w = WorkspaceClient()
 
 client = OpenAI(
@@ -141,6 +145,7 @@ vs_index_name = f"{catalog}.{schema}.gtm_knowledge_vs_index"
 
 # COMMAND ----------
 
+# DBTITLE 1,Define Agent Tool Functions
 def query_accounts(industry: str = None, min_revenue: float = None,
                    account_tier: str = None, region: str = None,
                    limit: int = 10) -> str:
@@ -322,11 +327,13 @@ def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
 
 # COMMAND ----------
 
+# DBTITLE 1,Validate Tool Functions
 # MAGIC %md
 # MAGIC Validate that all three tools return expected results before wiring them into the agent.
 
 # COMMAND ----------
 
+# DBTITLE 1,Quick Tool Validation
 # Quick validation that tools work
 print("Validating tools...")
 print(f"  query_accounts:        {len(query_accounts(limit=1))} chars returned")
@@ -336,6 +343,7 @@ print("\nAll tools operational.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 1: Building a Custom Agent
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 1: Building a Custom GTM Assistant Agent
@@ -372,6 +380,7 @@ print("\nAll tools operational.")
 
 # COMMAND ----------
 
+# DBTITLE 1,1.1 — Define Tool Schemas
 # MAGIC %md
 # MAGIC ### 1.1 — Define Tool Schemas for the LLM
 # MAGIC
@@ -380,6 +389,7 @@ print("\nAll tools operational.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Define Tool Schemas for LLM
 # Define the tools the agent can use — the LLM reads these schemas to decide what to call
 tools = [
     {
@@ -465,6 +475,7 @@ for t in tools:
 
 # COMMAND ----------
 
+# DBTITLE 1,1.2 — Implement the Agent Loop
 # MAGIC %md
 # MAGIC ### 1.2 — Implement the Agent Loop
 # MAGIC
@@ -474,11 +485,13 @@ for t in tools:
 
 # COMMAND ----------
 
+# DBTITLE 1,Tool Name to Function Mapping
 # MAGIC %md
 # MAGIC Map tool names to their Python functions. The agent loop uses this dictionary to dispatch the correct function when the LLM requests a tool call.
 
 # COMMAND ----------
 
+# DBTITLE 1,Agent Loop Implementation
 # Map tool names to their Python functions
 tool_functions = {
     "query_accounts": query_accounts,
@@ -604,6 +617,7 @@ Guidelines:
 
 # COMMAND ----------
 
+# DBTITLE 1,1.3 — Test Single-Tool Conversations
 # MAGIC %md
 # MAGIC ### 1.3 — Test the Agent: Single-Tool Conversations
 # MAGIC
@@ -611,28 +625,33 @@ Guidelines:
 
 # COMMAND ----------
 
+# DBTITLE 1,Conversation 1: Account Data Query
 # MAGIC %md
 # MAGIC #### Conversation 1: Account Data Query (query_accounts tool)
 
 # COMMAND ----------
 
+# DBTITLE 1,Test query_accounts Tool
 response_1 = run_agent(
     "What are our top Enterprise accounts in the Technology industry? Show me the biggest ones by revenue."
 )
 
 # COMMAND ----------
 
+# DBTITLE 1,Conversation 2: Knowledge Base Search
 # MAGIC %md
 # MAGIC #### Conversation 2: Knowledge Base Search (search_knowledge_base tool)
 
 # COMMAND ----------
 
+# DBTITLE 1,Test search_knowledge_base Tool
 response_2 = run_agent(
     "What's our sales methodology for handling pricing objections from enterprise customers?"
 )
 
 # COMMAND ----------
 
+# DBTITLE 1,1.4 — Test Multi-Tool Conversation
 # MAGIC %md
 # MAGIC ### 1.4 — Test the Agent: Multi-Tool Conversation
 # MAGIC
@@ -640,22 +659,26 @@ response_2 = run_agent(
 
 # COMMAND ----------
 
+# DBTITLE 1,Conversation 3: Multi-Tool Query
 # MAGIC %md
 # MAGIC #### Conversation 3: Multi-Tool Query (analyze_pipeline + search_knowledge_base)
 
 # COMMAND ----------
 
+# DBTITLE 1,Test Multi-Tool Agent Call
 response_3 = run_agent(
     "Give me a pipeline analysis for deals in the Negotiation stage, and recommend specific actions we should take based on our sales playbooks to close these deals faster."
 )
 
 # COMMAND ----------
 
+# DBTITLE 1,Section Divider
 # MAGIC %md
 # MAGIC ---
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 2: MLflow ResponsesAgent
 # MAGIC %md
 # MAGIC # Section 2: MLflow ResponsesAgent Interface
 # MAGIC
@@ -672,11 +695,13 @@ response_3 = run_agent(
 
 # COMMAND ----------
 
+# DBTITLE 1,2.1 — Wrap Agent as MLflow Model
 # MAGIC %md
 # MAGIC ### 2.1 — Wrap the Agent as an MLflow PythonModel
 
 # COMMAND ----------
 
+# DBTITLE 1,GTMAssistantAgent MLflow Model
 import mlflow
 from mlflow.pyfunc import PythonModel
 import pandas as pd
@@ -837,6 +862,7 @@ print("This model wraps our agent loop, tool definitions, and system prompt into
 
 # COMMAND ----------
 
+# DBTITLE 1,2.2 — Save Agent Code
 # MAGIC %md
 # MAGIC ### 2.2 — Save Agent Code for Code-Based Logging
 # MAGIC
@@ -845,6 +871,7 @@ print("This model wraps our agent loop, tool definitions, and system prompt into
 
 # COMMAND ----------
 
+# DBTITLE 1,Code-Based Logging Explanation
 # MAGIC %md
 # MAGIC #### Code-Based Logging
 # MAGIC Instead of serializing (pickling) the agent object, we write the Python source code to a file and log it with MLflow.
@@ -852,11 +879,11 @@ print("This model wraps our agent loop, tool definitions, and system prompt into
 
 # COMMAND ----------
 
+# DBTITLE 1,Write Agent Code to File
 # Write the agent class to a standalone Python file for code-based MLflow logging
-import os, textwrap
+import os, textwrap, tempfile
 
-agent_code_dir = "/tmp/gtm_agent_code"
-os.makedirs(agent_code_dir, exist_ok=True)
+agent_code_dir = tempfile.mkdtemp(prefix="gtm_agent_code_")
 
 agent_code = textwrap.dedent('''
 import mlflow
@@ -950,11 +977,13 @@ print(f"Agent code saved to: {agent_code_path}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Create MLflow Experiment
 # MAGIC %md
 # MAGIC Create a dedicated MLflow experiment for this agent. The path follows the convention `/Users/{username}/experiment_name`.
 
 # COMMAND ----------
 
+# DBTITLE 1,Set MLflow Experiment
 # Set the MLflow experiment
 experiment_name = f"/Users/{username}/gtm_assistant_agent"
 mlflow.set_experiment(experiment_name)
@@ -963,6 +992,7 @@ print(f"MLflow experiment: {experiment_name}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Log Agent Model to MLflow
 # Log the agent model to MLflow using code-based logging
 with mlflow.start_run(run_name="gtm_assistant_v1") as run:
     # Log the model using code_paths (no pickle serialization needed)
@@ -1005,6 +1035,7 @@ print(f"  Model URI: {model_uri}")
 
 # COMMAND ----------
 
+# DBTITLE 1,2.3 — Register in Unity Catalog
 # MAGIC %md
 # MAGIC ### 2.3 — Register in Unity Catalog
 # MAGIC
@@ -1013,6 +1044,7 @@ print(f"  Model URI: {model_uri}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Register Model in Unity Catalog
 # Register the model in Unity Catalog
 registered_model_name = f"{catalog}.{schema}.gtm_assistant_agent"
 
@@ -1031,6 +1063,7 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 3: Deploying with Apps
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 3: Deploying with Databricks Apps (Conceptual)
@@ -1052,19 +1085,19 @@ except Exception as e:
 # MAGIC  │   │   │  Chat UI │  │ Dashboard│  │ Pipeline │               │       │
 # MAGIC  │   │   │          │  │  Charts  │  │  Table   │               │       │
 # MAGIC  │   │   └──────────┘  └──────────┘  └──────────┘               │       │
-# MAGIC  │   └────────────────────────┬────────────────────────────────────┘       │
+# MAGIC  │   └────────────────────────┴────────────────────────────────────┘       │
 # MAGIC  │                            │ /api/*                                     │
 # MAGIC  │   ┌────────────────────────▼────────────────────────────────────┐       │
 # MAGIC  │   │                  FastAPI Backend                            │       │
 # MAGIC  │   │   ┌──────────┐  ┌──────────┐  ┌──────────┐               │       │
 # MAGIC  │   │   │  /chat   │  │  /query  │  │ /pipeline│               │       │
 # MAGIC  │   │   │ endpoint │  │ endpoint │  │ endpoint │               │       │
-# MAGIC  │   │   └─────┬────┘  └─────┬────┘  └────┬─────┘               │       │
+# MAGIC  │   │   └─────┴────┘  └─────┴────┘  └────┴─────┘               │       │
 # MAGIC  │   │         │             │             │                      │       │
 # MAGIC  │   │         ▼             ▼             ▼                      │       │
 # MAGIC  │   │   Model Serving   Delta Tables   Spark SQL                │       │
 # MAGIC  │   │   (Agent)         (Unity Catalog)                         │       │
-# MAGIC  │   └────────────────────────────────────────────────────────────┘       │
+# MAGIC  │   └─────────────────────────────────────────────────────────────┘       │
 # MAGIC  └─────────────────────────────────────────────────────────────────────────┘
 # MAGIC ```
 # MAGIC
@@ -1152,6 +1185,7 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 4: AI Gateway and Governance
 # MAGIC %md
 # MAGIC # Section 4: AI Gateway & Governance
 # MAGIC
@@ -1181,7 +1215,7 @@ except Exception as e:
 # MAGIC  │                    │  │  Traffic  │ │   Fallback     │ │              │
 # MAGIC  │                    │  │  Routing  │ │   & Retry      │ │              │
 # MAGIC  │                    │  └──────────┘ └────────────────┘ │              │
-# MAGIC  │                    └──────────┬───────────────────────┘              │
+# MAGIC  │                    └──────────┴───────────────────────┘              │
 # MAGIC  │                               │                                      │
 # MAGIC  │              ┌────────────────┼────────────────┐                     │
 # MAGIC  │              ▼                ▼                ▼                      │
@@ -1244,6 +1278,7 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,4.1 — Simple Guardrails Example
 # MAGIC %md
 # MAGIC ### 4.1 -- Simple Guardrails Example
 # MAGIC
@@ -1254,6 +1289,7 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,Guardrails Wrapper Function
 def guarded_agent_call(user_message: str) -> str:
     """
     Wrapper that applies basic guardrails before and after the agent call.
@@ -1303,6 +1339,7 @@ print(result)
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 5: MLflow 3.0 Tracing
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 5: MLflow 3.0 Tracing
@@ -1319,11 +1356,13 @@ print(result)
 
 # COMMAND ----------
 
+# DBTITLE 1,5.1 — Enable Automatic Tracing
 # MAGIC %md
 # MAGIC ### 5.1 — Enable Automatic Tracing
 
 # COMMAND ----------
 
+# DBTITLE 1,Enable MLflow OpenAI Autologging
 import mlflow
 
 # Enable automatic tracing for OpenAI calls
@@ -1335,11 +1374,13 @@ print("All subsequent OpenAI API calls will be automatically traced.")
 
 # COMMAND ----------
 
+# DBTITLE 1,5.2 — Run Traced Conversation
 # MAGIC %md
 # MAGIC ### 5.2 — Run a Traced Agent Conversation
 
 # COMMAND ----------
 
+# DBTITLE 1,Run Agent with Tracing Enabled
 # Run an agent conversation — MLflow will trace everything automatically
 print("Running agent with MLflow tracing enabled...\n")
 
@@ -1350,6 +1391,7 @@ traced_response = run_agent(
 
 # COMMAND ----------
 
+# DBTITLE 1,5.3 — View Traces
 # MAGIC %md
 # MAGIC ### 5.3 — View Traces
 # MAGIC
@@ -1364,6 +1406,7 @@ traced_response = run_agent(
 
 # COMMAND ----------
 
+# DBTITLE 1,Search Traces Programmatically
 # You can also search traces programmatically
 try:
     traces = mlflow.search_traces(
@@ -1371,13 +1414,14 @@ try:
     )
     print(f"Found {len(traces)} trace(s) in the experiment.\n")
     if len(traces) > 0:
-        display(traces[["request_id", "timestamp_ms", "status", "execution_time_ms"]].head(5))
+        display(traces[["trace_id", "state", "request_time", "execution_duration"]].head(5))
 except Exception as e:
     print(f"Trace search note: {e}")
     print("Traces are available in the MLflow Experiments UI.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 6: Agent Evaluation
 # MAGIC %md
 # MAGIC ---
 # MAGIC # Section 6: Agent Evaluation (LLM-as-Judge)
@@ -1400,11 +1444,13 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,6.1 — Create Evaluation Dataset
 # MAGIC %md
 # MAGIC ### 6.1 — Create an Evaluation Dataset
 
 # COMMAND ----------
 
+# DBTITLE 1,Build Evaluation Dataset
 # Build an evaluation dataset with questions and expected answer themes
 # These cover different tool-use patterns our agent should handle
 
@@ -1449,6 +1495,7 @@ display(eval_df)
 
 # COMMAND ----------
 
+# DBTITLE 1,6.2 — Run Agent on Eval Questions
 # MAGIC %md
 # MAGIC ### 6.2 — Run the Agent on Evaluation Questions
 # MAGIC
@@ -1456,6 +1503,7 @@ display(eval_df)
 
 # COMMAND ----------
 
+# DBTITLE 1,Generate Agent Predictions
 # Run the agent on each evaluation question and collect responses
 print("Running agent on evaluation questions...\n")
 
@@ -1477,6 +1525,7 @@ print(f"\nCompleted {len(eval_responses)} evaluations.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Show Sample Response
 # Show a sample response
 print("SAMPLE — Question 1:")
 print(f"  Q: {eval_df.iloc[0]['inputs']}")
@@ -1484,6 +1533,7 @@ print(f"  A: {eval_df.iloc[0]['predictions'][:500]}...")
 
 # COMMAND ----------
 
+# DBTITLE 1,6.3 — Evaluate with MLflow
 # MAGIC %md
 # MAGIC ### 6.3 — Evaluate with MLflow (LLM-as-Judge)
 # MAGIC
@@ -1492,6 +1542,7 @@ print(f"  A: {eval_df.iloc[0]['predictions'][:500]}...")
 
 # COMMAND ----------
 
+# DBTITLE 1,Run MLflow Evaluate
 # Prepare the evaluation data in the format mlflow.evaluate expects
 eval_data_for_mlflow = eval_df[["inputs", "predictions", "ground_truth"]].copy()
 
@@ -1524,6 +1575,7 @@ except Exception as e:
 
 # COMMAND ----------
 
+# DBTITLE 1,Display Evaluation Results Table
 # Display the per-question evaluation results
 try:
     eval_table = eval_results.tables.get("eval_results_table")
@@ -1536,6 +1588,7 @@ except Exception:
 
 # COMMAND ----------
 
+# DBTITLE 1,6.4 — Custom LLM-as-Judge
 # MAGIC %md
 # MAGIC ### 6.4 — Custom LLM-as-Judge Evaluation
 # MAGIC
@@ -1544,6 +1597,7 @@ except Exception:
 
 # COMMAND ----------
 
+# DBTITLE 1,LLM-as-Judge Evaluation Function
 def evaluate_response(question: str, response: str, ground_truth: str) -> dict:
     """
     Use the LLM to evaluate an agent response on multiple dimensions.
@@ -1588,6 +1642,7 @@ Respond ONLY in this exact JSON format:
 
 # COMMAND ----------
 
+# DBTITLE 1,Run Custom LLM-as-Judge Evaluation
 # Run custom LLM-as-Judge evaluation on all test cases
 print("Running LLM-as-Judge evaluation...\n")
 
@@ -1602,6 +1657,7 @@ for i, row in eval_df.iterrows():
 
 # COMMAND ----------
 
+# DBTITLE 1,Evaluation Summary Statistics
 # Summary statistics
 scores_df = pd.DataFrame(eval_scores)
 
@@ -1624,11 +1680,13 @@ if len(overall_valid) > 0:
 
 # COMMAND ----------
 
+# DBTITLE 1,Display Detailed Evaluation Table
 # Display detailed evaluation table
 display(scores_df[["question", "relevance", "completeness", "accuracy", "reasoning"]])
 
 # COMMAND ----------
 
+# DBTITLE 1,6.5 — Quality Thresholds
 # MAGIC %md
 # MAGIC ### 6.5 — Setting Quality Thresholds for Production
 # MAGIC
@@ -1638,7 +1696,7 @@ display(scores_df[["question", "relevance", "completeness", "accuracy", "reasoni
 # MAGIC **Recommended Production Thresholds:**
 # MAGIC
 # MAGIC | Metric | Minimum Score | Action if Below |
-# MAGIC |--------|---------------|-----------------|
+# MAGIC |--------|---------------|------------------|
 # MAGIC | Relevance | 4.0 / 5.0 | Block deployment, review system prompt |
 # MAGIC | Completeness | 3.5 / 5.0 | Review tool definitions, add more tools |
 # MAGIC | Accuracy | 4.0 / 5.0 | Check data freshness, review RAG pipeline |
@@ -1649,6 +1707,7 @@ display(scores_df[["question", "relevance", "completeness", "accuracy", "reasoni
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 7: Wrap-Up and Summary
 # MAGIC %md
 # MAGIC # Section 7: Wrap-Up — Full Workshop Summary
 # MAGIC
@@ -1668,7 +1727,7 @@ display(scores_df[["question", "relevance", "completeness", "accuracy", "reasoni
 # MAGIC
 # MAGIC ## The Complete Stack
 # MAGIC ```
-# MAGIC  ┌─────────────────────────────────────────────────────────────────────┐
+# MAGIC  ┌───────────────────────────────────────────────────────────────────┐
 # MAGIC  │                Databricks Data Intelligence Platform                │
 # MAGIC  │                                                                     │
 # MAGIC  │   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────────────────┐   │
@@ -1686,7 +1745,7 @@ display(scores_df[["question", "relevance", "completeness", "accuracy", "reasoni
 # MAGIC  │   │ RAG      │ │ Agent    │ │ No-code  │ │ Full-stack        │   │
 # MAGIC  │   │ Pipeline │ │ Compose  │ │ ML       │ │ Deployment        │   │
 # MAGIC  │   └──────────┘ └──────────┘ └──────────┘ └───────────────────┘   │
-# MAGIC  └─────────────────────────────────────────────────────────────────────┘
+# MAGIC  └───────────────────────────────────────────────────────────────────┘
 # MAGIC ```
 # MAGIC
 # MAGIC ---

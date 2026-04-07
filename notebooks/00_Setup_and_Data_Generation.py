@@ -1,4 +1,5 @@
 # Databricks notebook source
+# DBTITLE 1,Module Overview and Scenario
 # MAGIC %md
 # MAGIC # Module 0: Environment Setup & GTM Data Generation
 # MAGIC
@@ -33,6 +34,7 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Configuration Instructions
 # MAGIC %md
 # MAGIC ## 0.1 — Configuration
 # MAGIC
@@ -41,10 +43,12 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Load Shared Configuration
 # MAGIC %run ./_config
 
 # COMMAND ----------
 
+# DBTITLE 1,Unity Catalog Namespace
 # MAGIC %md
 # MAGIC ## 0.2 — Create Your Training Schema
 # MAGIC
@@ -57,6 +61,7 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Create Training Schema
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
 spark.sql(f"USE SCHEMA {schema}")
@@ -64,11 +69,13 @@ print(f"Active catalog/schema: {catalog}.{schema}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Imports
 # MAGIC %md
 # MAGIC ## 0.3 — Imports
 
 # COMMAND ----------
 
+# DBTITLE 1,Import Libraries and Define Helpers
 import numpy as np
 import pandas as pd
 from datetime import date, timedelta
@@ -88,6 +95,7 @@ def random_dates(start, end, n):
 
 # COMMAND ----------
 
+# DBTITLE 1,Reference Data Overview
 # MAGIC %md
 # MAGIC ## 0.4 — Reference Data
 # MAGIC
@@ -97,6 +105,7 @@ def random_dates(start, end, n):
 
 # COMMAND ----------
 
+# DBTITLE 1,Define Reference Data Constants
 PREFIXES = [
     "Apex", "Nova", "Quantum", "Vertex", "Horizon", "Summit", "Atlas",
     "Pinnacle", "Catalyst", "Meridian", "Nexus", "Vanguard", "Stellar",
@@ -159,6 +168,7 @@ PRODUCT_LINES = ["Platform Pro", "Data Analytics Suite", "AI Accelerator", "Clou
 
 # COMMAND ----------
 
+# DBTITLE 1,Accounts Table Description
 # MAGIC %md
 # MAGIC ## 0.5 — Generate Accounts (2,000 rows)
 # MAGIC
@@ -169,6 +179,7 @@ PRODUCT_LINES = ["Platform Pro", "Data Analytics Suite", "AI Accelerator", "Clou
 
 # COMMAND ----------
 
+# DBTITLE 1,Generate 2,000 Account Records
 n_accounts = 2000
 
 # Generate unique company names (prefixes x suffixes > 2000 needed)
@@ -210,6 +221,7 @@ print(f"gtm_accounts: {n_accounts} rows written")
 
 # COMMAND ----------
 
+# DBTITLE 1,Contacts Table Description
 # MAGIC %md
 # MAGIC ## 0.6 — Generate Contacts (10,000 rows)
 # MAGIC
@@ -218,6 +230,7 @@ print(f"gtm_accounts: {n_accounts} rows written")
 
 # COMMAND ----------
 
+# DBTITLE 1,Generate 10,000 Contact Records
 n_contacts = 10000
 account_ids = df_accounts["account_id"].values
 
@@ -241,11 +254,13 @@ print(f"gtm_contacts: {n_contacts} rows written")
 
 # COMMAND ----------
 
+# DBTITLE 1,Opportunities Section
 # MAGIC %md
 # MAGIC ## 0.7 — Generate Opportunities (5,000 rows)
 
 # COMMAND ----------
 
+# DBTITLE 1,Generate 5,000 Opportunity Records
 n_opps = 5000
 contact_ids = df_contacts["contact_id"].values
 
@@ -273,11 +288,13 @@ print(f"gtm_opportunities: {n_opps} rows written")
 
 # COMMAND ----------
 
+# DBTITLE 1,Activities Section
 # MAGIC %md
 # MAGIC ## 0.8 — Generate Activities (50,000 rows)
 
 # COMMAND ----------
 
+# DBTITLE 1,Generate 50,000 Activity Records
 n_activities = 50000
 opp_ids = df_opps["opportunity_id"].values
 
@@ -310,11 +327,13 @@ print(f"gtm_activities: {n_activities} rows written")
 
 # COMMAND ----------
 
+# DBTITLE 1,Campaigns Section
 # MAGIC %md
 # MAGIC ## 0.9 — Generate Campaigns (100 rows)
 
 # COMMAND ----------
 
+# DBTITLE 1,Generate 100 Campaign Records
 n_campaigns = 100
 campaign_types = ["Email Nurture", "Webinar", "Event", "Content Syndication", "Paid Search", "Social"]
 channels = ["Email", "Web", "Social", "Events", "Search", "Partner"]
@@ -339,11 +358,13 @@ print(f"gtm_campaigns: {n_campaigns} rows written")
 
 # COMMAND ----------
 
+# DBTITLE 1,Campaign Members Section
 # MAGIC %md
 # MAGIC ## 0.10 — Generate Campaign Members (20,000 rows)
 
 # COMMAND ----------
 
+# DBTITLE 1,Generate 20,000 Campaign Member Records
 n_members = 20000
 campaign_ids = df_campaigns["campaign_id"].values
 statuses = ["Sent", "Opened", "Clicked", "Responded", "Converted"]
@@ -372,6 +393,7 @@ print(f"gtm_campaign_members: {n_members} rows written")
 
 # COMMAND ----------
 
+# DBTITLE 1,Lead Scores Table Description
 # MAGIC %md
 # MAGIC ## 0.11 — Generate Lead Scores (10,000 rows — one per contact)
 # MAGIC
@@ -380,6 +402,7 @@ print(f"gtm_campaign_members: {n_members} rows written")
 
 # COMMAND ----------
 
+# DBTITLE 1,Generate 10,000 Lead Score Records
 n_leads = n_contacts  # one score per contact
 
 engagement = np.random.uniform(0, 100, n_leads)
@@ -414,6 +437,7 @@ print(f"gtm_lead_scores: {n_leads} rows written (conversion rate: {conv_rate:.1%
 
 # COMMAND ----------
 
+# DBTITLE 1,Knowledge Base Description
 # MAGIC %md
 # MAGIC ## 0.12 — Generate Knowledge Base (50 documents)
 # MAGIC
@@ -580,11 +604,13 @@ print(f"gtm_knowledge_base: {len(df_kb)} rows written")
 
 # COMMAND ----------
 
+# DBTITLE 1,Summary and Validation
 # MAGIC %md
 # MAGIC ## 0.13 — Summary & Validation
 
 # COMMAND ----------
 
+# DBTITLE 1,Validate All Generated Tables
 print("=" * 60)
 print("  DATA GENERATION COMPLETE")
 print("=" * 60)
@@ -601,12 +627,13 @@ for t in tables:
     total += count
     print(f"  {t:<30} {count:>6} rows")
 
-print(f"  {'─' * 40}")
+print(f"  {'\u2500' * 40}")
 print(f"  {'TOTAL':<30} {total:>6} rows")
 print(f"\n  Conversion rate: {spark.sql(f'SELECT AVG(converted) FROM {catalog}.{schema}.gtm_lead_scores').first()[0]:.1%}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Cleanup Instructions
 # MAGIC %md
 # MAGIC ## Cleanup (only run if you want to remove all training data)
 # MAGIC
@@ -614,5 +641,6 @@ print(f"\n  Conversion rate: {spark.sql(f'SELECT AVG(converted) FROM {catalog}.{
 
 # COMMAND ----------
 
+# DBTITLE 1,Drop Training Schema (Optional)
 # Uncomment the line below to drop the entire training schema and all data
 # spark.sql(f"DROP SCHEMA IF EXISTS {catalog}.{schema} CASCADE")

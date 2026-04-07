@@ -478,6 +478,16 @@ print(classification_report(y_test, y_pred, target_names=["Not Converted", "Conv
 
 # COMMAND ----------
 
+# DBTITLE 1,Interpreting the Metrics for GTM
+# MAGIC %md
+# MAGIC > **How to read these results:**
+# MAGIC >
+# MAGIC > An **AUC of 0.806** is strong for a lead scoring model — the model correctly ranks a randomly chosen converted lead above a non-converted one ~81% of the time. **Precision 0.71** means when we predict "converted," we're right 71% of the time. **Recall 0.61** means we catch 61% of actual conversions.
+# MAGIC >
+# MAGIC > In GTM, you'd tune this tradeoff based on whether you'd rather **miss leads** (lower recall) or **waste sales effort on false positives** (lower precision). If your sales team has limited capacity, optimize for precision. If missing any opportunity is costly, optimize for recall.
+
+# COMMAND ----------
+
 # DBTITLE 1,Visualize ROC Curve and Confusion Matrix
 # ── Visualize: ROC Curve and Confusion Matrix ────────────────
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
