@@ -1101,84 +1101,85 @@ print(response.choices[0].message.content)
 # COMMAND ----------
 
 # DBTITLE 1,Create UC Function: query_accounts
-# MAGIC %sql
-# MAGIC CREATE OR REPLACE FUNCTION ${catalog}.${schema}.query_accounts(
-# MAGIC   industry STRING DEFAULT NULL COMMENT 'Filter by industry (e.g. Technology, Financial Services, Healthcare)',
-# MAGIC   min_revenue DOUBLE DEFAULT NULL COMMENT 'Minimum annual revenue in dollars',
-# MAGIC   account_tier STRING DEFAULT NULL COMMENT 'Filter by tier: Enterprise, Mid-Market, or SMB',
-# MAGIC   region STRING DEFAULT NULL COMMENT 'Filter by region: North America, EMEA, APAC, LATAM',
-# MAGIC   max_results INT DEFAULT 10 COMMENT 'Maximum number of results to return'
-# MAGIC )
-# MAGIC RETURNS TABLE(
-# MAGIC   account_id STRING,
-# MAGIC   company_name STRING,
-# MAGIC   industry STRING,
-# MAGIC   employee_count INT,
-# MAGIC   annual_revenue DOUBLE,
-# MAGIC   region STRING,
-# MAGIC   country STRING,
-# MAGIC   account_tier STRING
-# MAGIC )
-# MAGIC COMMENT 'Query GTM accounts from the data warehouse. Use when the user asks about specific accounts, companies, industries, or revenue data. Returns structured account information including company name, industry, revenue, and tier.'
-# MAGIC RETURN
-# MAGIC   SELECT account_id, company_name, industry, employee_count,
-# MAGIC          annual_revenue, region, country, account_tier
-# MAGIC   FROM ${catalog}.${schema}.gtm_accounts
-# MAGIC   WHERE (industry IS NULL OR industry = query_accounts.industry)
-# MAGIC     AND (min_revenue IS NULL OR annual_revenue >= min_revenue)
-# MAGIC     AND (account_tier IS NULL OR account_tier = query_accounts.account_tier)
-# MAGIC     AND (region IS NULL OR region = query_accounts.region)
-# MAGIC   ORDER BY annual_revenue DESC
-# MAGIC   LIMIT max_results
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {catalog}.{schema}.query_accounts(
+  industry STRING DEFAULT NULL COMMENT 'Filter by industry (e.g. Technology, Financial Services, Healthcare)',
+  min_revenue DOUBLE DEFAULT NULL COMMENT 'Minimum annual revenue in dollars',
+  account_tier STRING DEFAULT NULL COMMENT 'Filter by tier: Enterprise, Mid-Market, or SMB',
+  region STRING DEFAULT NULL COMMENT 'Filter by region: North America, EMEA, APAC, LATAM',
+  max_results INT DEFAULT 10 COMMENT 'Maximum number of results to return'
+)
+RETURNS TABLE(
+  account_id STRING,
+  company_name STRING,
+  industry STRING,
+  employee_count INT,
+  annual_revenue DOUBLE,
+  region STRING,
+  country STRING,
+  account_tier STRING
+)
+COMMENT 'Query GTM accounts from the data warehouse. Use when the user asks about specific accounts, companies, industries, or revenue data. Returns structured account information including company name, industry, revenue, and tier.'
+RETURN
+  SELECT account_id, company_name, industry, employee_count,
+         annual_revenue, region, country, account_tier
+  FROM {catalog}.{schema}.gtm_accounts
+  WHERE (industry IS NULL OR industry = query_accounts.industry)
+    AND (min_revenue IS NULL OR annual_revenue >= min_revenue)
+    AND (account_tier IS NULL OR account_tier = query_accounts.account_tier)
+    AND (region IS NULL OR region = query_accounts.region)
+  ORDER BY annual_revenue DESC
+  LIMIT max_results
+""")
+print(f"Function {catalog}.{schema}.query_accounts created.")
 
 # COMMAND ----------
 
 # DBTITLE 1,Create UC Function: analyze_pipeline
-# MAGIC %sql
-# MAGIC CREATE OR REPLACE FUNCTION ${catalog}.${schema}.analyze_pipeline(
-# MAGIC   stage STRING DEFAULT NULL COMMENT 'Filter by deal stage: Prospecting, Discovery, Proposal, Negotiation, Closed Won, Closed Lost. Leave empty for all stages.'
-# MAGIC )
-# MAGIC RETURNS TABLE(
-# MAGIC   stage STRING,
-# MAGIC   deal_count INT,
-# MAGIC   total_amount DOUBLE,
-# MAGIC   avg_deal_size DOUBLE,
-# MAGIC   avg_probability_pct DOUBLE,
-# MAGIC   weighted_pipeline DOUBLE
-# MAGIC )
-# MAGIC COMMENT 'Analyze the sales pipeline with deal metrics and stage breakdowns. Use when the user asks about pipeline health, deal stages, revenue forecasts, or pipeline analytics.'
-# MAGIC RETURN
-# MAGIC   SELECT stage,
-# MAGIC          CAST(COUNT(*) AS INT) as deal_count,
-# MAGIC          ROUND(SUM(amount), 0) as total_amount,
-# MAGIC          ROUND(AVG(amount), 0) as avg_deal_size,
-# MAGIC          ROUND(AVG(probability) * 100, 1) as avg_probability_pct,
-# MAGIC          ROUND(SUM(amount * probability), 0) as weighted_pipeline
-# MAGIC   FROM ${catalog}.${schema}.gtm_opportunities
-# MAGIC   WHERE (stage IS NULL OR stage = analyze_pipeline.stage)
-# MAGIC   GROUP BY stage
-# MAGIC   ORDER BY avg_probability_pct DESC
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {catalog}.{schema}.analyze_pipeline(
+  stage STRING DEFAULT NULL COMMENT 'Filter by deal stage: Prospecting, Discovery, Proposal, Negotiation, Closed Won, Closed Lost. Leave empty for all stages.'
+)
+RETURNS TABLE(
+  stage STRING,
+  deal_count INT,
+  total_amount DOUBLE,
+  avg_deal_size DOUBLE,
+  avg_probability_pct DOUBLE,
+  weighted_pipeline DOUBLE
+)
+COMMENT 'Analyze the sales pipeline with deal metrics and stage breakdowns. Use when the user asks about pipeline health, deal stages, revenue forecasts, or pipeline analytics.'
+RETURN
+  SELECT stage,
+         CAST(COUNT(*) AS INT) as deal_count,
+         ROUND(SUM(amount), 0) as total_amount,
+         ROUND(AVG(amount), 0) as avg_deal_size,
+         ROUND(AVG(probability) * 100, 1) as avg_probability_pct,
+         ROUND(SUM(amount * probability), 0) as weighted_pipeline
+  FROM {catalog}.{schema}.gtm_opportunities
+  WHERE (stage IS NULL OR stage = analyze_pipeline.stage)
+  GROUP BY stage
+  ORDER BY avg_probability_pct DESC
+""")
+print(f"Function {catalog}.{schema}.analyze_pipeline created.")
 
 # COMMAND ----------
 
 # DBTITLE 1,Test UC Functions
-# MAGIC %sql
-# MAGIC -- Test query_accounts: Enterprise Technology accounts
-# MAGIC SELECT * FROM ${catalog}.${schema}.query_accounts('Technology', NULL, 'Enterprise', NULL, 5)
+# Test query_accounts: Enterprise Technology accounts
+display(spark.sql(f"SELECT * FROM {catalog}.{schema}.query_accounts('Technology', NULL, 'Enterprise', NULL, 5)"))
 
 # COMMAND ----------
 
 # DBTITLE 1,Test UC Pipeline Analysis
-# MAGIC %sql
-# MAGIC -- Test analyze_pipeline: all stages
-# MAGIC SELECT * FROM ${catalog}.${schema}.analyze_pipeline(NULL)
+# Test analyze_pipeline: all stages
+display(spark.sql(f"SELECT * FROM {catalog}.{schema}.analyze_pipeline(NULL)"))
 
 # COMMAND ----------
 
 # DBTITLE 1,Verify UC Function Registration
-# MAGIC %sql
-# MAGIC -- Show all user functions we registered in our schema
-# MAGIC SHOW USER FUNCTIONS IN ${catalog}.${schema}
+# Show all user functions we registered in our schema
+display(spark.sql(f"SHOW USER FUNCTIONS IN {catalog}.{schema}"))
 
 # COMMAND ----------
 
