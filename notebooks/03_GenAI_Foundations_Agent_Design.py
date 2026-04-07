@@ -30,7 +30,7 @@
 # COMMAND ----------
 
 # DBTITLE 1,Install Vector Search SDK
-# MAGIC %pip install databricks-vectorsearch openai databricks-sdk databricks-openai --quiet
+# MAGIC %pip install databricks-vectorsearch openai "databricks-sdk>=0.40.0" databricks-openai nest_asyncio --quiet
 
 # COMMAND ----------
 
@@ -53,6 +53,11 @@ dbutils.library.restartPython()
 # DBTITLE 1,Set Active Catalog and Schema
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"USE SCHEMA {schema}")
+
+# nest_asyncio allows MCP's async calls to work inside Databricks notebooks
+import nest_asyncio
+nest_asyncio.apply()
+
 print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 
 # COMMAND ----------

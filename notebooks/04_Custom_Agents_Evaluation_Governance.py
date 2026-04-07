@@ -60,7 +60,7 @@ print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 # COMMAND ----------
 
 # DBTITLE 1,Install Python Dependencies
-# MAGIC %pip install mlflow openai databricks-openai databricks-sdk databricks-agents uv nest_asyncio --quiet
+# MAGIC %pip install mlflow openai databricks-openai "databricks-sdk>=0.40.0" databricks-agents uv nest_asyncio --quiet
 
 # COMMAND ----------
 
