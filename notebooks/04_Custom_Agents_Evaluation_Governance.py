@@ -60,7 +60,7 @@ print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 # COMMAND ----------
 
 # DBTITLE 1,Install Python Dependencies
-# MAGIC %pip install mlflow openai databricks-openai "databricks-sdk>=0.40.0" databricks-agents uv nest_asyncio --quiet
+# MAGIC %pip install --force-reinstall databricks-openai databricks-agents mlflow openai uv nest_asyncio
 
 # COMMAND ----------
 
@@ -73,29 +73,22 @@ print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 # COMMAND ----------
 
 # DBTITLE 1,Fix typing_extensions Conflict
-# Fix serverless pre-installed package conflicts:
-# System versions of typing_extensions and databricks-sdk are too old for
-# openai/pydantic and databricks-openai respectively. Force-upgrade both.
+# Fix typing_extensions conflict on serverless compute:
+# The system typing_extensions is too old for openai/pydantic but takes precedence on sys.path.
 import subprocess, sys, importlib
 
-subprocess.check_call([sys.executable, "-m", "pip", "install",
-    "typing_extensions>=4.12", "databricks-sdk>=0.40.0",
-    "--upgrade", "--force-reinstall", "--quiet"])
+subprocess.check_call([sys.executable, "-m", "pip", "install", "typing_extensions>=4.12", "--upgrade", "--quiet"])
 
-# Clear cached modules so Python picks up the new versions
-for prefix in ["typing_extensions", "databricks.sdk", "databricks_sdk"]:
-    mods_to_remove = [k for k in sys.modules if k == prefix or k.startswith(prefix + ".")]
-    for mod in mods_to_remove:
-        del sys.modules[mod]
+# Clear cached modules
+mods_to_remove = [k for k in sys.modules if k == "typing_extensions" or k.startswith("typing_extensions.")]
+for mod in mods_to_remove:
+    del sys.modules[mod]
 importlib.invalidate_caches()
 
 import typing_extensions
-print(f"typing_extensions: {typing_extensions.__file__}")
-assert hasattr(typing_extensions, "deprecated"), "typing_extensions fix failed"
-
-from databricks.sdk.credentials_provider import CredentialsStrategy
-print(f"databricks-sdk: CredentialsStrategy available")
-print("Environment fixes verified successfully")
+print(f"typing_extensions loaded from: {typing_extensions.__file__}")
+assert hasattr(typing_extensions, "deprecated"), "typing_extensions fix failed: 'deprecated' not available"
+print("typing_extensions fix verified successfully")
 
 # COMMAND ----------
 
