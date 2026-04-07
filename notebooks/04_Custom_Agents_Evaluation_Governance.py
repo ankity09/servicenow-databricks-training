@@ -5,20 +5,21 @@
 # MAGIC
 # MAGIC **Databricks Training for ServiceNow | Afternoon Session - Part 2**
 # MAGIC
-# MAGIC In Module 3, we built the foundation: Foundation Model APIs, Vector Search, and three agent tools.
+# MAGIC In Module 3, we built the foundation: Foundation Model APIs, Vector Search, agent tools, and UC functions.
 # MAGIC Now we assemble everything into a **production-grade AI agent** and learn how to evaluate, govern,
 # MAGIC and deploy it.
 # MAGIC
 # MAGIC ### What You'll Learn
 # MAGIC | Section | Topic | Hands-On |
 # MAGIC |---------|-------|----------|
-# MAGIC | 1 | Building a Custom GTM Assistant Agent | Full agent with tool calling |
-# MAGIC | 2 | MLflow ResponsesAgent Interface | Package agent as MLflow model |
-# MAGIC | 3 | Deploying with Databricks Apps | Architecture & conceptual code |
-# MAGIC | 4 | AI Gateway & Governance | Safety, routing, monitoring |
-# MAGIC | 5 | MLflow 3.0 Tracing | Observability for agent calls |
-# MAGIC | 6 | Agent Evaluation (LLM-as-Judge) | Automated quality testing |
-# MAGIC | 7 | Wrap-Up & Next Steps | Certification, resources |
+# MAGIC | 1 | Understanding the Agent Loop | Build a manual agent loop |
+# MAGIC | 2 | MCP: Connecting Agents to Tools | Discover tools via MCP |
+# MAGIC | 3 | MCPToolCallingAgent (ResponsesAgent) | Package agent for deployment |
+# MAGIC | 4 | Deploy Agent to Production | agents.deploy() to serving endpoint |
+# MAGIC | 5 | AI Gateway & Governance | Safety, routing, monitoring |
+# MAGIC | 6 | MLflow 3.0 Tracing | Observability for agent calls |
+# MAGIC | 7 | Agent Evaluation | mlflow.genai.evaluate + LLM-as-Judge |
+# MAGIC | 8 | Wrap-Up & Next Steps | Certification, resources |
 # MAGIC
 # MAGIC > **ResponsesAgent** is MLflow's standard interface for packaging GenAI agents -- it handles input/output formatting, tool dispatch, and model versioning.
 # MAGIC
@@ -59,7 +60,7 @@ print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 # COMMAND ----------
 
 # DBTITLE 1,Install Python Dependencies
-# MAGIC %pip install mlflow openai databricks-sdk tiktoken --quiet
+# MAGIC %pip install mlflow openai databricks-openai databricks-sdk databricks-agents uv nest_asyncio --quiet
 
 # COMMAND ----------
 
@@ -98,24 +99,30 @@ print("typing_extensions fix verified successfully")
 
 # COMMAND ----------
 
-# DBTITLE 1,Post-Install Configuration Note
+# DBTITLE 1,Post-Install Configuration
 # MAGIC %md
-# MAGIC After the library install (which restarts the Python process), reload configuration.
+# MAGIC After the library install (which restarts the Python process), reload configuration and apply nest_asyncio.
 
 # COMMAND ----------
 
-# DBTITLE 1,Reactivate Catalog and Schema
+# DBTITLE 1,Reactivate Catalog and Apply Async Fix
 spark.sql(f"USE CATALOG {catalog}")
 spark.sql(f"USE SCHEMA {schema}")
 
+# nest_asyncio allows MCP's async event loops to work inside Databricks notebooks
+import nest_asyncio
+nest_asyncio.apply()
+print("Catalog/schema active. nest_asyncio applied.")
+
 # COMMAND ----------
 
-# DBTITLE 1,Redefine Agent Tools
+# DBTITLE 1,Redefine Agent Tools for Section 1
 # MAGIC %md
-# MAGIC ### Redefine Agent Tools
+# MAGIC ### Redefine Agent Tools (for Section 1)
 # MAGIC
-# MAGIC Since notebooks run independently, we redefine the three tools from Module 3.
-# MAGIC In production, these would live in a shared Python package or Unity Catalog functions.
+# MAGIC These Python functions are the **educational** versions from Module 3. We need them here for
+# MAGIC the manual agent loop in Section 1. In Section 2, we'll replace them with **MCP-discovered** tools
+# MAGIC from Unity Catalog -- governed, deployed, and self-describing.
 
 # COMMAND ----------
 
@@ -123,12 +130,6 @@ spark.sql(f"USE SCHEMA {schema}")
 from databricks.sdk import WorkspaceClient
 from openai import OpenAI
 import json
-
-# COMMAND ----------
-
-# DBTITLE 1,Initialize OpenAI Client
-# MAGIC %md
-# MAGIC Initialize the OpenAI-compatible client (pointed at Databricks' Foundation Model API) and the Vector Search index created in Notebook 03.
 
 # COMMAND ----------
 
@@ -140,27 +141,14 @@ client = OpenAI(
     base_url=f"{workspace_url}/serving-endpoints"
 )
 
-# Vector Search index name
-vs_index_name = f"{catalog}.{schema}.gtm_knowledge_vs_index"
-
 # COMMAND ----------
 
-# DBTITLE 1,Define Agent Tool Functions
+# DBTITLE 1,Define Tool 1: query_accounts
 def query_accounts(industry: str = None, min_revenue: float = None,
                    account_tier: str = None, region: str = None,
                    limit: int = 10) -> str:
     """
     Query GTM accounts from Delta tables based on filters.
-
-    Args:
-        industry: Filter by industry (e.g., 'Technology', 'Financial Services')
-        min_revenue: Minimum annual revenue in dollars
-        account_tier: Filter by tier ('Enterprise', 'Mid-Market', 'SMB')
-        region: Filter by region (e.g., 'North America', 'EMEA')
-        limit: Maximum number of results (default 10)
-
-    Returns:
-        Formatted string with matching account details
     """
     conditions = []
     if industry:
@@ -199,17 +187,12 @@ def query_accounts(industry: str = None, min_revenue: float = None,
     except Exception as e:
         return f"Error querying accounts: {str(e)}"
 
+# COMMAND ----------
 
+# DBTITLE 1,Define Tool 2: search_knowledge_base
 def search_knowledge_base(query: str, num_results: int = 3) -> str:
     """
     Search the GTM knowledge base using Vector Search for semantically relevant documents.
-
-    Args:
-        query: Natural language search query
-        num_results: Number of results to return (default 3)
-
-    Returns:
-        Formatted string with relevant document excerpts
     """
     try:
         results = w.vector_search_indexes.query_index(
@@ -235,17 +218,12 @@ def search_knowledge_base(query: str, num_results: int = 3) -> str:
     except Exception as e:
         return f"Error searching knowledge base: {str(e)}"
 
+# COMMAND ----------
 
+# DBTITLE 1,Define Tool 3: analyze_pipeline
 def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
     """
     Analyze the sales pipeline and return summary insights.
-
-    Args:
-        stage: Optional filter by deal stage (e.g., 'Negotiation', 'Proposal', 'Discovery')
-        include_details: If True, include individual deal details
-
-    Returns:
-        Formatted string with pipeline analysis
     """
     try:
         stage_filter = f"WHERE stage = '{stage}'" if stage else ""
@@ -256,8 +234,8 @@ def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
                 COUNT(*) as deal_count,
                 ROUND(SUM(amount), 0) as total_amount,
                 ROUND(AVG(amount), 0) as avg_deal_size,
-                ROUND(AVG(probability), 1) as avg_probability,
-                ROUND(SUM(amount * probability / 100), 0) as weighted_pipeline
+                ROUND(AVG(probability) * 100, 1) as avg_probability,
+                ROUND(SUM(amount * probability), 0) as weighted_pipeline
             FROM {catalog}.{schema}.gtm_opportunities
             {stage_filter}
             GROUP BY stage
@@ -272,7 +250,7 @@ def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
             SELECT
                 COUNT(*) as total_deals,
                 ROUND(SUM(amount), 0) as total_pipeline,
-                ROUND(SUM(amount * probability / 100), 0) as weighted_pipeline,
+                ROUND(SUM(amount * probability), 0) as weighted_pipeline,
                 ROUND(AVG(amount), 0) as avg_deal_size
             FROM {catalog}.{schema}.gtm_opportunities
             {stage_filter}
@@ -303,7 +281,8 @@ def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
 
         if include_details and stage:
             detail_query = f"""
-                SELECT o.opportunity_id, a.company_name, o.amount, o.probability, o.close_date
+                SELECT o.opportunity_id, a.company_name, o.amount,
+                       ROUND(o.probability * 100, 0) as probability_pct, o.close_date
                 FROM {catalog}.{schema}.gtm_opportunities o
                 JOIN {catalog}.{schema}.gtm_accounts a ON o.account_id = a.account_id
                 WHERE o.stage = '{stage}'
@@ -317,29 +296,13 @@ def analyze_pipeline(stage: str = None, include_details: bool = False) -> str:
                 output_lines.append(
                     f"  {row['company_name']:<30} | "
                     f"${row['amount']:>12,.0f} | "
-                    f"Prob: {row['probability']}% | "
+                    f"Prob: {int(row['probability_pct'])}% | "
                     f"Close: {row['close_date']}"
                 )
 
         return "\n".join(output_lines)
     except Exception as e:
         return f"Error analyzing pipeline: {str(e)}"
-
-# COMMAND ----------
-
-# DBTITLE 1,Validate Tool Functions
-# MAGIC %md
-# MAGIC Validate that all three tools return expected results before wiring them into the agent.
-
-# COMMAND ----------
-
-# DBTITLE 1,Quick Tool Validation
-# Quick validation that tools work
-print("Validating tools...")
-print(f"  query_accounts:        {len(query_accounts(limit=1))} chars returned")
-print(f"  search_knowledge_base: {len(search_knowledge_base('test query', 1))} chars returned")
-print(f"  analyze_pipeline:      {len(analyze_pipeline())} chars returned")
-print("\nAll tools operational.")
 
 # COMMAND ----------
 
@@ -672,304 +635,399 @@ response_3 = run_agent(
 
 # COMMAND ----------
 
-# DBTITLE 1,Section Divider
+# DBTITLE 1,Bridge: From Manual to MCP
 # MAGIC %md
 # MAGIC ---
-
-# COMMAND ----------
-
-# DBTITLE 1,Section 2: MLflow ResponsesAgent
-# MAGIC %md
-# MAGIC # Section 2: MLflow ResponsesAgent Interface
+# MAGIC ### Reflection: What We Just Built (and Why It's Fragile)
 # MAGIC
-# MAGIC To deploy an agent to production, we need to package it as a standard model. MLflow provides
-# MAGIC the **ResponsesAgent** interface (and PythonModel) — a standardized way to wrap agents so they
-# MAGIC can be versioned, tested, and served like any other ML model.
+# MAGIC We manually defined tool schemas (80+ lines of JSON), mapped them to functions, and wrote a dispatch
+# MAGIC loop. This works, but it's **fragile at scale**:
 # MAGIC
-# MAGIC ### Why Package as an MLflow Model?
-# MAGIC - **Versioning**: Track agent versions with code, tools, and prompts
-# MAGIC - **Registry**: Store in Unity Catalog alongside your other models
-# MAGIC - **Serving**: Deploy to Model Serving with one click
-# MAGIC - **Evaluation**: Use `mlflow.evaluate()` for automated quality testing
-# MAGIC - **Tracing**: Built-in observability for every agent call
+# MAGIC | Problem | Manual Approach | With MCP |
+# MAGIC |---------|----------------|----------|
+# MAGIC | Adding a new tool | Edit JSON schemas + dispatch dict + function | Register a UC function -- agent discovers it automatically |
+# MAGIC | Schema drift | JSON schema can diverge from actual function signature | Schema IS the function definition |
+# MAGIC | Governance | No audit trail for tool access | UC permissions + audit logging |
+# MAGIC | Deployment | Tools only work inside this notebook | UC functions work everywhere |
+# MAGIC
+# MAGIC In the next section, **MCP automates all of this**.
 
 # COMMAND ----------
 
-# DBTITLE 1,2.1 — Wrap Agent as MLflow Model
+# DBTITLE 1,Section 2: MCP — Connecting Agents to Tools
 # MAGIC %md
-# MAGIC ### 2.1 — Wrap the Agent as an MLflow PythonModel
+# MAGIC ---
+# MAGIC # Section 2: MCP — Connecting Agents to Tools
+# MAGIC
+# MAGIC The **Model Context Protocol (MCP)** lets agents discover tools at runtime instead of hardcoding
+# MAGIC schemas. Databricks exposes Unity Catalog functions and Vector Search indexes as MCP servers.
+# MAGIC
+# MAGIC We'll use `databricks-openai` to connect to these MCP servers and replace our manual tool wiring.
 
 # COMMAND ----------
 
-# DBTITLE 1,GTMAssistantAgent MLflow Model
+# DBTITLE 1,2.1 — Initialize MCP Clients
+from databricks_openai import McpServerToolkit, DatabricksOpenAI
+from databricks.sdk import WorkspaceClient
+
+w = WorkspaceClient()
+host = w.config.host
+
+# DatabricksOpenAI is an OpenAI-compatible client that natively supports MCP tool execution
+mcp_client = DatabricksOpenAI()
+
+print(f"Workspace: {host}")
+print(f"DatabricksOpenAI client ready.")
+
+# COMMAND ----------
+
+# DBTITLE 1,2.2 — Configure MCP Servers
+# MAGIC %md
+# MAGIC ### 2.2 — Configure MCP Servers
+# MAGIC
+# MAGIC We connect to two MCP servers:
+# MAGIC 1. **UC Functions** — the `query_accounts` and `analyze_pipeline` functions we registered in Module 3
+# MAGIC 2. **Vector Search** — semantic search over our knowledge base index
+
+# COMMAND ----------
+
+# DBTITLE 1,Connect to UC Functions and Vector Search MCP Servers
+# UC Functions MCP server — discovers all functions in our schema
+uc_mcp = McpServerToolkit(url=f"{host}/api/2.0/mcp/functions/{catalog}/{schema}")
+
+# Vector Search MCP server — provides semantic search tools
+vs_mcp = McpServerToolkit(url=f"{host}/api/2.0/mcp/vector-search/{vs_endpoint_name}/{vs_index_name}")
+
+mcp_servers = [uc_mcp, vs_mcp]
+
+print(f"Configured {len(mcp_servers)} MCP servers:")
+print(f"  1. UC Functions: {catalog}.{schema}")
+print(f"  2. Vector Search: {vs_index_name}")
+
+# COMMAND ----------
+
+# DBTITLE 1,2.3 — Discover Tools via MCP
+# Discover all available tools from our MCP servers
+all_tools = {}
+for server in mcp_servers:
+    try:
+        for tool in server.get_tools():
+            all_tools[tool.name] = tool
+            print(f"  Discovered: {tool.name}")
+    except Exception as e:
+        print(f"  Server error: {e}")
+
+print(f"\nTotal: {len(all_tools)} tools from {len(mcp_servers)} MCP servers")
+
+# COMMAND ----------
+
+# DBTITLE 1,MCP vs Manual: The Difference
+# MAGIC %md
+# MAGIC ### Compare: Manual vs MCP
+# MAGIC
+# MAGIC | Aspect | Manual (Section 1) | MCP (Section 2) |
+# MAGIC |--------|-------------------|-----------------|
+# MAGIC | Tool schemas | 80+ lines of hand-written JSON | Auto-discovered from UC |
+# MAGIC | Adding a tool | Edit 3 places (schema, dispatch, function) | Register a UC function |
+# MAGIC | Schema drift risk | High — JSON can diverge from code | Zero — schema IS the definition |
+# MAGIC | Governance | None | UC permissions + audit log |
+# MAGIC | Lines of code | ~120 | ~10 |
+
+# COMMAND ----------
+
+# DBTITLE 1,Section 3: MCPToolCallingAgent (ResponsesAgent)
+# MAGIC %md
+# MAGIC ---
+# MAGIC # Section 3: MCPToolCallingAgent (ResponsesAgent)
+# MAGIC
+# MAGIC To deploy our agent to production, we need to package it using MLflow's **ResponsesAgent** interface.
+# MAGIC `ResponsesAgent` provides `predict()` and `predict_stream()` methods that Databricks Model Serving
+# MAGIC understands natively.
+# MAGIC
+# MAGIC We'll build an `MCPToolCallingAgent` that:
+# MAGIC - Discovers tools via MCP at startup
+# MAGIC - Uses `DatabricksOpenAI` for LLM calls
+# MAGIC - Implements the full agent loop with tool execution
+# MAGIC - Traces every operation via MLflow
+
+# COMMAND ----------
+
+# DBTITLE 1,3.1 — Define MCPToolCallingAgent
 import mlflow
-from mlflow.pyfunc import PythonModel
-import pandas as pd
+from mlflow.entities import SpanType
+from mlflow.pyfunc import ResponsesAgent, ResponsesAgentRequest, ResponsesAgentResponse, ResponsesAgentStreamEvent
+from databricks_openai import DatabricksOpenAI, McpServerToolkit
+import json
 
-class GTMAssistantAgent(PythonModel):
+class MCPToolCallingAgent(ResponsesAgent):
     """
-    A GTM Strategy Assistant Agent packaged as an MLflow model.
-    Uses Databricks Foundation Models for LLM and Vector Search for RAG.
+    A GTM Strategy Assistant Agent using MCP for tool discovery.
+    Implements the ResponsesAgent interface for Databricks Model Serving.
     """
 
-    def load_context(self, context):
-        """Called once when the model is loaded for serving."""
-        import os
-        from openai import OpenAI
-        from databricks.sdk import WorkspaceClient
+    SYSTEM_PROMPT = """You are a senior GTM (Go-To-Market) Strategy Assistant for an enterprise software company.
+You have access to tools for querying account data, searching knowledge documents, and analyzing the sales pipeline.
 
-        # In serving, credentials come from the environment
-        self.client = OpenAI(
-            api_key=os.environ.get("DATABRICKS_TOKEN", ""),
-            base_url=os.environ.get("DATABRICKS_HOST", "") + "/serving-endpoints"
+Guidelines:
+- Use tools to gather data before answering — never make up numbers or facts
+- You can call multiple tools if the question requires different types of information
+- Always cite your data sources (which tool provided the data)
+- Be concise but thorough — executives read your outputs
+- Format responses with clear headers, bullet points, and data highlights
+- If a tool returns an error or no results, explain what happened and suggest alternatives"""
+
+    def __init__(self, llm_endpoint: str = None, mcp_servers: list = None):
+        """Initialize the agent with an LLM endpoint and MCP servers."""
+        super().__init__()
+        self._llm_endpoint = llm_endpoint
+        self._mcp_servers = mcp_servers
+        self._client = None
+        self._tools_dict = None
+
+    def _ensure_initialized(self):
+        """Lazy initialization — called on first predict/predict_stream."""
+        if self._client is not None:
+            return
+
+        self._client = DatabricksOpenAI()
+
+        # Discover tools from MCP servers
+        self._tools_dict = {}
+        if self._mcp_servers:
+            for server in self._mcp_servers:
+                try:
+                    for tool in server.get_tools():
+                        self._tools_dict[tool.name] = tool
+                except Exception as e:
+                    print(f"MCP server error: {e}")
+
+    @mlflow.trace(span_type=SpanType.TOOL)
+    def execute_tool(self, tool_name: str, tool_args: dict) -> str:
+        """Execute a discovered MCP tool by name."""
+        if tool_name not in self._tools_dict:
+            return f"Unknown tool: {tool_name}"
+        try:
+            tool = self._tools_dict[tool_name]
+            result = tool.execute(tool_args)
+            return str(result) if result else "Tool returned no results."
+        except Exception as e:
+            return f"Tool execution error: {str(e)}"
+
+    @mlflow.trace(span_type=SpanType.LLM)
+    def call_llm(self, messages: list) -> dict:
+        """Call the LLM with tool schemas."""
+        tool_specs = [t.to_openai_tool() for t in self._tools_dict.values()]
+
+        response = self._client.chat.completions.create(
+            model=self._llm_endpoint,
+            messages=messages,
+            tools=tool_specs if tool_specs else None,
+            tool_choice="auto" if tool_specs else None,
+            max_tokens=1000,
+            temperature=0.2
         )
-        self.w = WorkspaceClient()
-        self.model_name = "databricks-meta-llama-3-3-70b-instruct"
-        self.catalog = os.environ.get("CATALOG", "ankit_yadav")
-        self.schema = os.environ.get("SCHEMA", "servicenow_training")
-        self.vs_index = f"{self.catalog}.{self.schema}.gtm_knowledge_vs_index"
+        return response
 
-        # Tool definitions (same as before)
-        self.tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "query_accounts",
-                    "description": "Query GTM account data by industry, revenue, tier, or region.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "industry": {"type": "string", "description": "Industry filter"},
-                            "min_revenue": {"type": "number", "description": "Minimum revenue"},
-                            "account_tier": {"type": "string", "description": "Tier: Enterprise, Mid-Market, SMB"},
-                            "region": {"type": "string", "description": "Region filter"},
-                            "limit": {"type": "integer", "description": "Max results (default 10)"}
-                        },
-                        "required": []
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_knowledge_base",
-                    "description": "Search product docs, playbooks, and competitive intel.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "Search query"},
-                            "num_results": {"type": "integer", "description": "Number of results"}
-                        },
-                        "required": ["query"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "analyze_pipeline",
-                    "description": "Analyze sales pipeline by stage with metrics.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "stage": {"type": "string", "description": "Deal stage filter"},
-                            "include_details": {"type": "boolean", "description": "Include deal details"}
-                        },
-                        "required": []
-                    }
-                }
-            }
-        ]
+    def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
+        """Run the agent and return a complete response."""
+        self._ensure_initialized()
 
-        self.system_prompt = """You are a senior GTM Strategy Assistant. Use your tools to answer questions
-with real data. Be concise, cite your sources, and format responses for executives."""
+        # Extract user message from the request
+        messages = [{"role": "system", "content": self.SYSTEM_PROMPT}]
+        if hasattr(request, 'input') and isinstance(request.input, list):
+            for msg in request.input:
+                if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                    messages.append({"role": msg.role, "content": msg.content})
+                elif isinstance(msg, dict):
+                    messages.append(msg)
+        elif hasattr(request, 'input') and isinstance(request.input, str):
+            messages.append({"role": "user", "content": request.input})
 
-    def _execute_tool(self, name, args):
-        """Execute a tool by name with given arguments."""
-        # In a production deployment, tools would use SparkSession from the serving env
-        # For this example, we return a placeholder
-        return f"[Tool {name} called with {args} — results would appear here in production]"
+        # Agent loop — max 10 iterations
+        for iteration in range(10):
+            response = self.call_llm(messages)
+            msg = response.choices[0].message
 
-    def predict(self, context, model_input, params=None):
-        """
-        Run the agent on one or more input messages.
-
-        Args:
-            model_input: DataFrame with 'messages' column (or 'inputs' for simple queries)
-
-        Returns:
-            List of response strings
-        """
-        import json
-
-        # Handle different input formats
-        if isinstance(model_input, pd.DataFrame):
-            if "messages" in model_input.columns:
-                queries = model_input["messages"].tolist()
-            elif "inputs" in model_input.columns:
-                queries = model_input["inputs"].tolist()
+            if msg.tool_calls:
+                # Add assistant message with tool calls
+                messages.append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {"id": tc.id, "type": "function",
+                         "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                        for tc in msg.tool_calls
+                    ]
+                })
+                # Execute each tool
+                for tc in msg.tool_calls:
+                    args = json.loads(tc.function.arguments) if isinstance(tc.function.arguments, str) else tc.function.arguments
+                    result = self.execute_tool(tc.function.name, args)
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
             else:
-                queries = model_input.iloc[:, 0].tolist()
-        elif isinstance(model_input, list):
-            queries = model_input
-        else:
-            queries = [str(model_input)]
+                # Final response — no more tool calls
+                return ResponsesAgentResponse(output=msg.content or "")
 
-        responses = []
-        for query in queries:
-            # Build messages
-            messages = [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": str(query)}
-            ]
+        return ResponsesAgentResponse(output="Agent reached maximum iterations.")
 
-            # Agent loop (simplified for serving)
-            for _ in range(3):
-                response = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages,
-                    tools=self.tools,
-                    tool_choice="auto",
-                    max_tokens=800,
-                    temperature=0.2
-                )
+    def predict_stream(self, request: ResponsesAgentRequest):
+        """Streaming version — yields events as they occur."""
+        # For simplicity, we delegate to predict and yield the final result
+        result = self.predict(request)
+        yield ResponsesAgentStreamEvent(data={"output": result.output})
 
-                msg = response.choices[0].message
-
-                if msg.tool_calls:
-                    messages.append({
-                        "role": "assistant",
-                        "content": msg.content or "",
-                        "tool_calls": [
-                            {"id": tc.id, "type": "function",
-                             "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                            for tc in msg.tool_calls
-                        ]
-                    })
-                    for tc in msg.tool_calls:
-                        result = self._execute_tool(tc.function.name, tc.function.arguments)
-                        messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
-                else:
-                    responses.append(msg.content)
-                    break
-            else:
-                responses.append("Agent could not produce a response.")
-
-        return responses
-
-print("GTMAssistantAgent class defined.")
-print("This model wraps our agent loop, tool definitions, and system prompt into a deployable unit.")
+print("MCPToolCallingAgent class defined.")
 
 # COMMAND ----------
 
-# DBTITLE 1,2.2 — Save Agent Code
+# DBTITLE 1,3.2 — Test Agent Locally
+# Instantiate the agent with our MCP servers
+agent = MCPToolCallingAgent(
+    llm_endpoint=llm_endpoint,
+    mcp_servers=mcp_servers
+)
+
+# Test with a simple query
+result = agent.predict(
+    ResponsesAgentRequest(input=[{"role": "user", "content": "What are our top Enterprise Technology accounts?"}])
+)
+
+print("AGENT RESPONSE:")
+print("=" * 60)
+print(result.output)
+
+# COMMAND ----------
+
+# DBTITLE 1,3.3 — Test Multi-Tool Query
+# Test a query that requires multiple tools
+result = agent.predict(
+    ResponsesAgentRequest(input=[{"role": "user", "content": "Give me a pipeline analysis for deals in the Negotiation stage, and recommend specific actions from our sales playbooks to close these deals faster."}])
+)
+
+print("MULTI-TOOL RESPONSE:")
+print("=" * 60)
+print(result.output)
+
+# COMMAND ----------
+
+# DBTITLE 1,3.4 — Write Agent Code for MLflow Logging
 # MAGIC %md
-# MAGIC ### 2.2 — Save Agent Code for Code-Based Logging
+# MAGIC ### 3.4 — Save Agent Code for Deployment
 # MAGIC
-# MAGIC Modern MLflow recommends **code-based logging** instead of pickle-based serialization.
-# MAGIC We save the agent class to a Python file, then log with `code_paths`.
-
-# COMMAND ----------
-
-# DBTITLE 1,Code-Based Logging Explanation
-# MAGIC %md
-# MAGIC #### Code-Based Logging
-# MAGIC Instead of serializing (pickling) the agent object, we write the Python source code to a file and log it with MLflow.
-# MAGIC This is the recommended approach for LLM agents -- it is more reproducible, easier to debug, and avoids serialization issues with API clients.
+# MAGIC MLflow recommends **code-based logging** — we save the agent class to a Python file and
+# MAGIC log it with `mlflow.pyfunc.log_model()`. This is more reproducible than pickle-based serialization.
 
 # COMMAND ----------
 
 # DBTITLE 1,Write Agent Code to File
-# Write the agent class to a standalone Python file for code-based MLflow logging
 import os, textwrap, tempfile
 
-agent_code_dir = tempfile.mkdtemp(prefix="gtm_agent_code_")
+agent_code_dir = tempfile.mkdtemp(prefix="mcp_agent_code_")
 
-agent_code = textwrap.dedent('''
+agent_code = textwrap.dedent(f'''
 import mlflow
-from mlflow.pyfunc import PythonModel
-import pandas as pd
+from mlflow.entities import SpanType
+from mlflow.pyfunc import ResponsesAgent, ResponsesAgentRequest, ResponsesAgentResponse, ResponsesAgentStreamEvent
+from databricks_openai import DatabricksOpenAI, McpServerToolkit
+from databricks.sdk import WorkspaceClient
+import json
+import nest_asyncio
+nest_asyncio.apply()
 
-class GTMAssistantAgent(PythonModel):
-    """
-    A GTM Strategy Assistant Agent packaged as an MLflow model.
-    Uses Databricks Foundation Models for LLM and Vector Search for RAG.
-    """
+class MCPToolCallingAgent(ResponsesAgent):
+    """A GTM Strategy Assistant Agent using MCP for tool discovery."""
 
-    def load_context(self, context):
-        """Called once when the model is loaded for serving."""
-        import os
-        from openai import OpenAI
-        from databricks.sdk import WorkspaceClient
+    SYSTEM_PROMPT = """You are a senior GTM (Go-To-Market) Strategy Assistant for an enterprise software company.
+You have access to tools for querying account data, searching knowledge documents, and analyzing the sales pipeline.
+Use tools to gather data before answering. Be concise, cite your sources, and format responses for executives."""
 
-        self.client = OpenAI(
-            api_key=os.environ.get("DATABRICKS_TOKEN", ""),
-            base_url=os.environ.get("DATABRICKS_HOST", "") + "/serving-endpoints"
-        )
-        self.w = WorkspaceClient()
-        self.model_name = "databricks-meta-llama-3-3-70b-instruct"
-        self.catalog = os.environ.get("CATALOG", "ankit_yadav")
-        self.schema = os.environ.get("SCHEMA", "servicenow_training")
-        self.vs_index = f"{self.catalog}.{self.schema}.gtm_knowledge_vs_index"
+    LLM_ENDPOINT = "{llm_endpoint}"
+    CATALOG = "{catalog}"
+    SCHEMA = "{schema}"
+    VS_ENDPOINT = "{vs_endpoint_name}"
+    VS_INDEX = "{vs_index_name}"
 
-        self.tools = [
-            {"type": "function", "function": {"name": "query_accounts", "description": "Query GTM account data by industry, revenue, tier, or region.", "parameters": {"type": "object", "properties": {"industry": {"type": "string"}, "min_revenue": {"type": "number"}, "account_tier": {"type": "string"}, "region": {"type": "string"}, "limit": {"type": "integer"}}, "required": []}}},
-            {"type": "function", "function": {"name": "search_knowledge_base", "description": "Search product docs, playbooks, and competitive intel.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "num_results": {"type": "integer"}}, "required": ["query"]}}},
-            {"type": "function", "function": {"name": "analyze_pipeline", "description": "Analyze sales pipeline by stage with metrics.", "parameters": {"type": "object", "properties": {"stage": {"type": "string"}, "include_details": {"type": "boolean"}}, "required": []}}}
+    def __init__(self):
+        super().__init__()
+        self._client = None
+        self._tools_dict = None
+
+    def _ensure_initialized(self):
+        if self._client is not None:
+            return
+
+        self._client = DatabricksOpenAI()
+        w = WorkspaceClient()
+        host = w.config.host
+
+        self._tools_dict = {{}}
+        mcp_servers = [
+            McpServerToolkit(url=f"{{host}}/api/2.0/mcp/functions/{{self.CATALOG}}/{{self.SCHEMA}}"),
+            McpServerToolkit(url=f"{{host}}/api/2.0/mcp/vector-search/{{self.VS_ENDPOINT}}/{{self.VS_INDEX}}"),
         ]
+        for server in mcp_servers:
+            try:
+                for tool in server.get_tools():
+                    self._tools_dict[tool.name] = tool
+            except Exception:
+                pass
 
-        self.system_prompt = """You are a senior GTM Strategy Assistant. Use your tools to answer questions with real data. Be concise, cite your sources, and format responses for executives."""
+    @mlflow.trace(span_type=SpanType.TOOL)
+    def execute_tool(self, tool_name, tool_args):
+        if tool_name not in self._tools_dict:
+            return f"Unknown tool: {{tool_name}}"
+        try:
+            result = self._tools_dict[tool_name].execute(tool_args)
+            return str(result) if result else "Tool returned no results."
+        except Exception as e:
+            return f"Tool execution error: {{str(e)}}"
 
-    def _execute_tool(self, name, args):
-        return f"[Tool {name} called with {args} - results would appear here in production]"
+    @mlflow.trace(span_type=SpanType.LLM)
+    def call_llm(self, messages):
+        tool_specs = [t.to_openai_tool() for t in self._tools_dict.values()]
+        return self._client.chat.completions.create(
+            model=self.LLM_ENDPOINT, messages=messages,
+            tools=tool_specs if tool_specs else None,
+            tool_choice="auto" if tool_specs else None,
+            max_tokens=1000, temperature=0.2
+        )
 
-    def predict(self, context, model_input, params=None):
-        import json
+    def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
+        self._ensure_initialized()
+        messages = [{{"role": "system", "content": self.SYSTEM_PROMPT}}]
+        if hasattr(request, "input") and isinstance(request.input, list):
+            for msg in request.input:
+                if hasattr(msg, "role") and hasattr(msg, "content"):
+                    messages.append({{"role": msg.role, "content": msg.content}})
+                elif isinstance(msg, dict):
+                    messages.append(msg)
+        elif hasattr(request, "input") and isinstance(request.input, str):
+            messages.append({{"role": "user", "content": request.input}})
 
-        if isinstance(model_input, pd.DataFrame):
-            if "messages" in model_input.columns:
-                queries = model_input["messages"].tolist()
-            elif "inputs" in model_input.columns:
-                queries = model_input["inputs"].tolist()
+        for _ in range(10):
+            response = self.call_llm(messages)
+            msg = response.choices[0].message
+            if msg.tool_calls:
+                messages.append({{"role": "assistant", "content": msg.content or "",
+                    "tool_calls": [{{"id": tc.id, "type": "function",
+                        "function": {{"name": tc.function.name, "arguments": tc.function.arguments}}}}
+                        for tc in msg.tool_calls]}})
+                for tc in msg.tool_calls:
+                    args = json.loads(tc.function.arguments) if isinstance(tc.function.arguments, str) else tc.function.arguments
+                    result = self.execute_tool(tc.function.name, args)
+                    messages.append({{"role": "tool", "tool_call_id": tc.id, "content": result}})
             else:
-                queries = model_input.iloc[:, 0].tolist()
-        elif isinstance(model_input, list):
-            queries = model_input
-        else:
-            queries = [str(model_input)]
+                return ResponsesAgentResponse(output=msg.content or "")
+        return ResponsesAgentResponse(output="Agent reached maximum iterations.")
 
-        responses = []
-        for query in queries:
-            messages = [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": str(query)}
-            ]
-            for _ in range(3):
-                response = self.client.chat.completions.create(
-                    model=self.model_name, messages=messages, tools=self.tools,
-                    tool_choice="auto", max_tokens=800, temperature=0.2
-                )
-                msg = response.choices[0].message
-                if msg.tool_calls:
-                    messages.append({"role": "assistant", "content": msg.content or "",
-                        "tool_calls": [{"id": tc.id, "type": "function",
-                            "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                            for tc in msg.tool_calls]})
-                    for tc in msg.tool_calls:
-                        result = self._execute_tool(tc.function.name, tc.function.arguments)
-                        messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
-                else:
-                    responses.append(msg.content)
-                    break
-            else:
-                responses.append("Agent could not produce a response.")
-        return responses
+    def predict_stream(self, request: ResponsesAgentRequest):
+        result = self.predict(request)
+        yield ResponsesAgentStreamEvent(data={{"output": result.output}})
 
-# Required for code-based logging
-mlflow.models.set_model(GTMAssistantAgent())
+mlflow.models.set_model(MCPToolCallingAgent())
 ''').strip()
 
-agent_code_path = os.path.join(agent_code_dir, "gtm_agent.py")
+agent_code_path = os.path.join(agent_code_dir, "mcp_agent.py")
 with open(agent_code_path, "w") as f:
     f.write(agent_code)
 
@@ -977,57 +1035,59 @@ print(f"Agent code saved to: {agent_code_path}")
 
 # COMMAND ----------
 
-# DBTITLE 1,Create MLflow Experiment
+# DBTITLE 1,3.5 — Log and Register Model
 # MAGIC %md
-# MAGIC Create a dedicated MLflow experiment for this agent. The path follows the convention `/Users/{username}/experiment_name`.
+# MAGIC ### 3.5 — Log Model to MLflow and Register in Unity Catalog
 
 # COMMAND ----------
 
 # DBTITLE 1,Set MLflow Experiment
-# Set the MLflow experiment
+import mlflow
+from mlflow.models.resources import DatabricksServingEndpoint, DatabricksFunction
+
 experiment_name = f"/Users/{username}/gtm_assistant_agent"
 mlflow.set_experiment(experiment_name)
-
 print(f"MLflow experiment: {experiment_name}")
 
 # COMMAND ----------
 
 # DBTITLE 1,Log Agent Model to MLflow
-# Log the agent model to MLflow using code-based logging
-with mlflow.start_run(run_name="gtm_assistant_v1") as run:
-    # Log the model using code_paths (no pickle serialization needed)
+with mlflow.start_run(run_name="mcp_agent_v1") as run:
     model_info = mlflow.pyfunc.log_model(
-        artifact_path="gtm_agent",
+        artifact_path="mcp_agent",
         python_model=agent_code_path,
         pip_requirements=[
             "mlflow>=2.14.0",
             "openai>=1.0.0",
+            "databricks-openai",
             "databricks-sdk>=0.20.0",
-            "pandas"
+            "databricks-agents",
+            "nest_asyncio",
         ],
-        input_example=pd.DataFrame({"inputs": ["What are our top Technology accounts?"]}),
+        resources=[
+            DatabricksServingEndpoint(endpoint_name=llm_endpoint),
+            DatabricksFunction(function_name=f"{catalog}.{schema}.query_accounts"),
+            DatabricksFunction(function_name=f"{catalog}.{schema}.analyze_pipeline"),
+        ],
     )
 
-    # Log parameters for tracking
     mlflow.log_params({
-        "model": "databricks-meta-llama-3-3-70b-instruct",
-        "embedding_model": "databricks-gte-large-en",
-        "num_tools": 3,
-        "max_iterations": 3,
+        "model": llm_endpoint,
+        "num_mcp_servers": 2,
+        "max_iterations": 10,
         "temperature": 0.2,
         "catalog": catalog,
         "schema": schema
     })
 
-    # Log tags
     mlflow.set_tags({
-        "agent_type": "tool-calling",
+        "agent_type": "mcp-tool-calling",
         "use_case": "gtm-assistant",
         "training_session": "servicenow-2026"
     })
 
     run_id = run.info.run_id
-    model_uri = f"runs:/{run_id}/gtm_agent"
+    model_uri = f"runs:/{run_id}/mcp_agent"
 
 print(f"Model logged successfully!")
 print(f"  Run ID:    {run_id}")
@@ -1035,159 +1095,113 @@ print(f"  Model URI: {model_uri}")
 
 # COMMAND ----------
 
-# DBTITLE 1,2.3 — Register in Unity Catalog
-# MAGIC %md
-# MAGIC ### 2.3 — Register in Unity Catalog
-# MAGIC
-# MAGIC Registering the model in Unity Catalog makes it available across the workspace with
-# MAGIC proper governance (access controls, lineage, versioning).
-
-# COMMAND ----------
-
 # DBTITLE 1,Register Model in Unity Catalog
-# Register the model in Unity Catalog
-registered_model_name = f"{catalog}.{schema}.gtm_assistant_agent"
+mlflow.set_registry_uri("databricks-uc")
 
 try:
-    mlflow.set_registry_uri("databricks-uc")
     registered_model = mlflow.register_model(
         model_uri=model_uri,
-        name=registered_model_name
+        name=registered_agent_model_name
     )
-    print(f"Model registered: {registered_model_name}")
+    print(f"Model registered: {registered_agent_model_name}")
     print(f"  Version: {registered_model.version}")
-    print(f"\nView in Unity Catalog: Catalog Explorer > {catalog} > {schema} > Models > gtm_assistant_agent")
 except Exception as e:
     print(f"Registration note: {e}")
-    print("\nThe model is still available via the MLflow run URI for evaluation.")
+    print("The model is still available via the MLflow run URI.")
 
 # COMMAND ----------
 
-# DBTITLE 1,Section 3: Deploying with Apps
+# DBTITLE 1,3.6 — Pre-Deploy Validation
+# MAGIC %md
+# MAGIC ### 3.6 — Pre-Deploy Validation
+# MAGIC
+# MAGIC Before deploying, validate the logged model loads and runs correctly using `mlflow.models.predict()`.
+
+# COMMAND ----------
+
+# DBTITLE 1,Validate Logged Model
+# Validate the model works before deploying
+try:
+    validation_result = mlflow.models.predict(
+        model_uri=model_uri,
+        input_data={"input": [{"role": "user", "content": "What are our top Technology accounts?"}]},
+        env_manager="uv"
+    )
+    print("Pre-deploy validation PASSED:")
+    print(f"  Response: {str(validation_result)[:300]}...")
+except Exception as e:
+    print(f"Pre-deploy validation note: {e}")
+    print("You may need to verify package versions on the target environment.")
+
+# COMMAND ----------
+
+# DBTITLE 1,Section 4: Deploy Agent to Production
 # MAGIC %md
 # MAGIC ---
-# MAGIC # Section 3: Deploying with Databricks Apps (Conceptual)
+# MAGIC # Section 4: Deploy Agent to Production
 # MAGIC
-# MAGIC > **Note:** This section is a conceptual overview -- no executable code. It shows how you would deploy the agent we just built as a production Databricks App.
+# MAGIC `agents.deploy()` is the Databricks-recommended way to deploy an agent. It creates:
+# MAGIC - A **Model Serving endpoint** with the agent
+# MAGIC - A **Review App** for human feedback and testing
+# MAGIC - An **Inference Table** for monitoring all requests/responses
 # MAGIC
-# MAGIC **Databricks Apps** provide full-stack application hosting directly on the Databricks platform.
-# MAGIC You can build and deploy web applications — with a backend API and a rich frontend UI — that
-# MAGIC access Databricks compute, storage, and AI models securely.
+# MAGIC This is the production path — no need to write your own FastAPI server or manage infrastructure.
+
+# COMMAND ----------
+
+# DBTITLE 1,4.1 — Deploy with agents.deploy()
+from databricks.agents import deploy
+
+try:
+    deployment = deploy(
+        model_name=registered_agent_model_name,
+        model_version=registered_model.version,
+    )
+
+    print(f"Agent deployment initiated!")
+    print(f"  Endpoint:    {deployment.endpoint_name}")
+    print(f"  Query endpoint: {deployment.query_endpoint}")
+    if hasattr(deployment, 'review_app_url') and deployment.review_app_url:
+        print(f"  Review App:  {deployment.review_app_url}")
+    print(f"\nThe endpoint typically takes 5-15 minutes to provision.")
+    print(f"You can continue with Sections 5-6 while it provisions.")
+except Exception as e:
+    print(f"Deployment note: {e}")
+    print("\nThis may require Model Serving permissions. Ask your instructor if needed.")
+    print("You can still proceed with the remaining sections.")
+
+# COMMAND ----------
+
+# DBTITLE 1,What agents.deploy() Created
+# MAGIC %md
+# MAGIC ### What `agents.deploy()` Created
 # MAGIC
-# MAGIC ### Architecture
 # MAGIC ```
-# MAGIC  ┌─────────────────────────────────────────────────────────────────────────┐
-# MAGIC  │                        Databricks App                                   │
-# MAGIC  │                                                                         │
-# MAGIC  │   ┌─────────────────────────────────────────────────────────────┐       │
-# MAGIC  │   │                    React Frontend                           │       │
-# MAGIC  │   │   ┌──────────┐  ┌──────────┐  ┌──────────┐               │       │
-# MAGIC  │   │   │  Chat UI │  │ Dashboard│  │ Pipeline │               │       │
-# MAGIC  │   │   │          │  │  Charts  │  │  Table   │               │       │
-# MAGIC  │   │   └──────────┘  └──────────┘  └──────────┘               │       │
-# MAGIC  │   └────────────────────────┴────────────────────────────────────┘       │
-# MAGIC  │                            │ /api/*                                     │
-# MAGIC  │   ┌────────────────────────▼────────────────────────────────────┐       │
-# MAGIC  │   │                  FastAPI Backend                            │       │
-# MAGIC  │   │   ┌──────────┐  ┌──────────┐  ┌──────────┐               │       │
-# MAGIC  │   │   │  /chat   │  │  /query  │  │ /pipeline│               │       │
-# MAGIC  │   │   │ endpoint │  │ endpoint │  │ endpoint │               │       │
-# MAGIC  │   │   └─────┴────┘  └─────┴────┘  └────┴─────┘               │       │
-# MAGIC  │   │         │             │             │                      │       │
-# MAGIC  │   │         ▼             ▼             ▼                      │       │
-# MAGIC  │   │   Model Serving   Delta Tables   Spark SQL                │       │
-# MAGIC  │   │   (Agent)         (Unity Catalog)                         │       │
-# MAGIC  │   └─────────────────────────────────────────────────────────────┘       │
-# MAGIC  └─────────────────────────────────────────────────────────────────────────┘
-# MAGIC ```
-# MAGIC
-# MAGIC ### Conceptual `app.yaml` Configuration
-# MAGIC ```yaml
-# MAGIC # app.yaml — Defines how the Databricks App starts
-# MAGIC command:
-# MAGIC   - "uvicorn"
-# MAGIC   - "app.main:app"
-# MAGIC   - "--host"
-# MAGIC   - "0.0.0.0"
-# MAGIC   - "--port"
-# MAGIC   - "8000"
-# MAGIC
-# MAGIC env:
-# MAGIC   - name: CATALOG
-# MAGIC     value: "ankit_yadav"
-# MAGIC   - name: SCHEMA
-# MAGIC     value: "servicenow_training"
-# MAGIC ```
-# MAGIC
-# MAGIC ### Conceptual FastAPI Backend
-# MAGIC ```python
-# MAGIC # app/main.py — FastAPI backend serving the agent
-# MAGIC from fastapi import FastAPI
-# MAGIC from fastapi.staticfiles import StaticFiles
-# MAGIC from pydantic import BaseModel
-# MAGIC
-# MAGIC app = FastAPI()
-# MAGIC api_app = FastAPI()
-# MAGIC
-# MAGIC class ChatRequest(BaseModel):
-# MAGIC     message: str
-# MAGIC     conversation_id: str = None
-# MAGIC
-# MAGIC @api_app.post("/chat")
-# MAGIC async def chat(request: ChatRequest):
-# MAGIC     # Load the agent from Model Serving or run locally
-# MAGIC     response = run_agent(request.message)
-# MAGIC     return {"response": response, "conversation_id": request.conversation_id}
-# MAGIC
-# MAGIC @api_app.get("/pipeline")
-# MAGIC async def pipeline_summary():
-# MAGIC     return analyze_pipeline()
-# MAGIC
-# MAGIC # Mount API and static frontend
-# MAGIC app.mount("/api", api_app)
-# MAGIC app.mount("/", StaticFiles(directory="client/build", html=True), name="static")
+# MAGIC  ┌───────────────────────────────────────────────────────────────────┐
+# MAGIC  │                    agents.deploy() Output                         │
+# MAGIC  │                                                                   │
+# MAGIC  │   ┌─────────────────┐  ┌──────────────────┐  ┌──────────────┐  │
+# MAGIC  │   │  Model Serving  │  │   Review App     │  │  Inference   │  │
+# MAGIC  │   │  Endpoint       │  │                  │  │  Table       │  │
+# MAGIC  │   │                 │  │  Web UI for      │  │              │  │
+# MAGIC  │   │  REST API for   │  │  human testing   │  │  Logs all    │  │
+# MAGIC  │   │  agent queries  │  │  and feedback    │  │  requests &  │  │
+# MAGIC  │   │                 │  │                  │  │  responses   │  │
+# MAGIC  │   └─────────────────┘  └──────────────────┘  └──────────────┘  │
+# MAGIC  └───────────────────────────────────────────────────────────────────┘
 # MAGIC ```
 # MAGIC
-# MAGIC ### Conceptual React Chat Component
-# MAGIC ```tsx
-# MAGIC // client/src/components/ChatInterface.tsx
-# MAGIC const ChatInterface = () => {
-# MAGIC   const [messages, setMessages] = useState<Message[]>([]);
-# MAGIC   const [input, setInput] = useState("");
-# MAGIC
-# MAGIC   const sendMessage = async () => {
-# MAGIC     const response = await fetch("/api/chat", {
-# MAGIC       method: "POST",
-# MAGIC       headers: { "Content-Type": "application/json" },
-# MAGIC       body: JSON.stringify({ message: input }),
-# MAGIC     });
-# MAGIC     const data = await response.json();
-# MAGIC     setMessages([...messages,
-# MAGIC       { role: "user", content: input },
-# MAGIC       { role: "assistant", content: data.response }
-# MAGIC     ]);
-# MAGIC   };
-# MAGIC
-# MAGIC   return (
-# MAGIC     <div className="flex flex-col h-full bg-gray-900">
-# MAGIC       <MessageList messages={messages} />
-# MAGIC       <InputBar value={input} onChange={setInput} onSend={sendMessage} />
-# MAGIC     </div>
-# MAGIC   );
-# MAGIC };
-# MAGIC ```
-# MAGIC
-# MAGIC > **Key Takeaway:** Databricks Apps let you ship a complete, production-grade web application
-# MAGIC > without leaving the platform. Your agent gets a beautiful UI, proper auth, and governed
-# MAGIC > data access — all in one deployment.
+# MAGIC > **Want a full-stack UI?** Databricks Apps let you build React + FastAPI applications that
+# MAGIC > call your agent endpoint. That's a natural next step after this workshop -- the agent
+# MAGIC > backend is already deployed and ready to serve.
 # MAGIC
 # MAGIC ---
 
 # COMMAND ----------
 
-# DBTITLE 1,Section 4: AI Gateway and Governance
+# DBTITLE 1,Section 5: AI Gateway and Governance
 # MAGIC %md
-# MAGIC # Section 4: AI Gateway & Governance
+# MAGIC # Section 5: AI Gateway & Governance
 # MAGIC
 # MAGIC As organizations scale GenAI, **governance** becomes critical. Databricks AI Gateway provides
 # MAGIC a unified control plane for all LLM interactions -- whether internal (Databricks-hosted) or
@@ -1278,9 +1292,9 @@ except Exception as e:
 
 # COMMAND ----------
 
-# DBTITLE 1,4.1 — Simple Guardrails Example
+# DBTITLE 1,5.1 — Simple Guardrails Example
 # MAGIC %md
-# MAGIC ### 4.1 -- Simple Guardrails Example
+# MAGIC ### 5.1 -- Simple Guardrails Example
 # MAGIC
 # MAGIC Let's demonstrate a basic content safety pattern. In production, these guardrails are
 # MAGIC configured at the AI Gateway level. Here we show the concept with a wrapper function.
@@ -1296,7 +1310,6 @@ def guarded_agent_call(user_message: str) -> str:
     In production, use AI Gateway's built-in guardrails instead.
     """
     # --- INPUT GUARDRAILS ---
-    # Check for obviously off-topic or harmful requests
     blocked_patterns = [
         "ignore your instructions",
         "pretend you are",
@@ -1313,15 +1326,16 @@ def guarded_agent_call(user_message: str) -> str:
                 "Please ask a business-related question."
             )
 
-    # --- CALL THE AGENT ---
-    response = run_agent(user_message, verbose=False)
+    # --- CALL THE MCP AGENT ---
+    result = agent.predict(
+        ResponsesAgentRequest(input=[{"role": "user", "content": user_message}])
+    )
+
+    response = result.output
 
     # --- OUTPUT GUARDRAILS ---
-    # Check for PII patterns in the response (simplified example)
     import re
-    # Redact anything that looks like an SSN
     response = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED-SSN]', response)
-    # Redact anything that looks like a credit card number
     response = re.sub(r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b', '[REDACTED-CC]', response)
 
     return response
@@ -1339,10 +1353,15 @@ print(result)
 
 # COMMAND ----------
 
-# DBTITLE 1,Section 5: MLflow 3.0 Tracing
+# DBTITLE 1,Guardrails: Key Takeaway
 # MAGIC %md
 # MAGIC ---
-# MAGIC # Section 5: MLflow 3.0 Tracing
+
+# COMMAND ----------
+
+# DBTITLE 1,Section 6: MLflow 3.0 Tracing
+# MAGIC %md
+# MAGIC # Section 6: MLflow 3.0 Tracing
 # MAGIC
 # MAGIC **MLflow Tracing** provides observability for every step of an agent's execution.
 # MAGIC When enabled, it automatically captures:
@@ -1352,13 +1371,13 @@ print(result)
 # MAGIC
 # MAGIC This is essential for debugging agent behavior and understanding why an agent gave a particular answer.
 # MAGIC
-# MAGIC > **MLflow Tracing** records a hierarchical trace of every operation in an agent run -- LLM calls, tool invocations, and their results form connected **spans** in a tree. This is essential for debugging why an agent gave a particular answer.
+# MAGIC > **MLflow Tracing** records a hierarchical trace of every operation in an agent run -- LLM calls, tool invocations, and their results form connected **spans** in a tree.
 
 # COMMAND ----------
 
-# DBTITLE 1,5.1 — Enable Automatic Tracing
+# DBTITLE 1,6.1 — Enable Automatic Tracing
 # MAGIC %md
-# MAGIC ### 5.1 — Enable Automatic Tracing
+# MAGIC ### 6.1 — Enable Automatic Tracing
 
 # COMMAND ----------
 
@@ -1366,7 +1385,6 @@ print(result)
 import mlflow
 
 # Enable automatic tracing for OpenAI calls
-# This instruments the OpenAI client to capture all API calls as traces
 mlflow.openai.autolog()
 
 print("MLflow OpenAI autologging enabled.")
@@ -1374,26 +1392,29 @@ print("All subsequent OpenAI API calls will be automatically traced.")
 
 # COMMAND ----------
 
-# DBTITLE 1,5.2 — Run Traced Conversation
+# DBTITLE 1,6.2 — Run Traced Agent Conversation
 # MAGIC %md
-# MAGIC ### 5.2 — Run a Traced Agent Conversation
+# MAGIC ### 6.2 — Run a Traced Agent Conversation
 
 # COMMAND ----------
 
-# DBTITLE 1,Run Agent with Tracing Enabled
-# Run an agent conversation — MLflow will trace everything automatically
-print("Running agent with MLflow tracing enabled...\n")
+# DBTITLE 1,Run MCP Agent with Tracing
+# Run the MCP agent — MLflow will trace all LLM and tool calls automatically
+print("Running MCP agent with MLflow tracing enabled...\n")
 
-traced_response = run_agent(
-    "What Technology accounts do we have in EMEA, and what sales resources do we have for that industry?",
-    verbose=True
+traced_result = agent.predict(
+    ResponsesAgentRequest(input=[{"role": "user", "content": "What Technology accounts do we have in EMEA, and what sales resources do we have for that industry?"}])
 )
 
+print("TRACED RESPONSE:")
+print("=" * 60)
+print(traced_result.output)
+
 # COMMAND ----------
 
-# DBTITLE 1,5.3 — View Traces
+# DBTITLE 1,6.3 — View Traces
 # MAGIC %md
-# MAGIC ### 5.3 — View Traces
+# MAGIC ### 6.3 — View Traces
 # MAGIC
 # MAGIC The traces are now visible in the MLflow UI. Navigate to:
 # MAGIC **Experiments** > `gtm_assistant_agent` > **Traces** tab
@@ -1407,7 +1428,6 @@ traced_response = run_agent(
 # COMMAND ----------
 
 # DBTITLE 1,Search Traces Programmatically
-# You can also search traces programmatically
 try:
     traces = mlflow.search_traces(
         experiment_ids=[mlflow.get_experiment_by_name(experiment_name).experiment_id]
@@ -1421,71 +1441,60 @@ except Exception as e:
 
 # COMMAND ----------
 
-# DBTITLE 1,Section 6: Agent Evaluation
+# DBTITLE 1,Section 7: Agent Evaluation
 # MAGIC %md
 # MAGIC ---
-# MAGIC # Section 6: Agent Evaluation (LLM-as-Judge)
+# MAGIC # Section 7: Agent Evaluation
 # MAGIC
 # MAGIC Before deploying an agent to production, you need to systematically evaluate its quality.
-# MAGIC **LLM-as-Judge** is a technique where a separate LLM evaluates the agent's outputs against
-# MAGIC ground truth answers and quality criteria. It uses a separate, powerful LLM to evaluate agent outputs against quality criteria (faithfulness, relevance, safety), scaling evaluation beyond what manual human review can cover.
+# MAGIC Databricks provides two complementary approaches:
 # MAGIC
-# MAGIC Databricks provides this natively through `mlflow.evaluate()` with the `"databricks-agent"` model type.
+# MAGIC 1. **`mlflow.genai.evaluate()`** — Built-in scorers for relevance, safety, and guidelines
+# MAGIC 2. **Custom LLM-as-Judge** — Domain-specific evaluation when built-in scorers aren't enough
 # MAGIC
 # MAGIC ### Evaluation Metrics
 # MAGIC | Metric | What It Measures | Why It Matters |
 # MAGIC |--------|-----------------|----------------|
-# MAGIC | **Faithfulness** | Is the answer supported by the retrieved context? | Prevents hallucination |
 # MAGIC | **Relevance** | Does the answer address the user's question? | Ensures usefulness |
-# MAGIC | **Groundedness** | Are claims traceable to source documents? | Builds trust |
 # MAGIC | **Safety** | Is the output free from harmful content? | Compliance |
-# MAGIC
-# MAGIC > **Faithfulness** -- the answer is supported by the retrieved documents (no hallucination). **Groundedness** -- every claim is traceable to a specific source.
+# MAGIC | **Groundedness** | Are claims traceable to source documents? | Builds trust |
+# MAGIC | **Completeness** | Does it cover the key themes expected? | Quality bar |
 
 # COMMAND ----------
 
-# DBTITLE 1,6.1 — Create Evaluation Dataset
+# DBTITLE 1,7.1 — Create Evaluation Dataset
 # MAGIC %md
-# MAGIC ### 6.1 — Create an Evaluation Dataset
+# MAGIC ### 7.1 — Create an Evaluation Dataset
 
 # COMMAND ----------
 
 # DBTITLE 1,Build Evaluation Dataset
-# Build an evaluation dataset with questions and expected answer themes
-# These cover different tool-use patterns our agent should handle
+import pandas as pd
 
 eval_questions = [
     {
-        "inputs": "What are our top Enterprise accounts in the Technology industry?",
-        "ground_truth": "The response should list specific Technology industry accounts with Enterprise tier, including company names, revenue figures, and employee counts from the GTM database."
+        "inputs": [{"role": "user", "content": "What are our top Enterprise accounts in the Technology industry?"}],
+        "ground_truth": "The response should list specific Technology industry accounts with Enterprise tier, including company names, revenue figures, and employee counts."
     },
     {
-        "inputs": "What's our sales methodology for handling objections?",
-        "ground_truth": "The response should reference specific objection handling techniques from the sales playbook knowledge base, such as frameworks, strategies, or step-by-step processes."
+        "inputs": [{"role": "user", "content": "What's our sales methodology for handling objections?"}],
+        "ground_truth": "The response should reference specific objection handling techniques from the sales playbook knowledge base."
     },
     {
-        "inputs": "Give me a pipeline analysis for the Negotiation stage.",
+        "inputs": [{"role": "user", "content": "Give me a pipeline analysis for the Negotiation stage."}],
         "ground_truth": "The response should include total deal count, total pipeline value, weighted pipeline, and average deal size for deals in the Negotiation stage."
     },
     {
-        "inputs": "What competitive advantages do we have over Snowflake?",
-        "ground_truth": "The response should cite specific competitive differentiators from the knowledge base, such as unified platform benefits, lakehouse architecture, pricing advantages, or ML capabilities."
+        "inputs": [{"role": "user", "content": "What competitive advantages do we have over Snowflake?"}],
+        "ground_truth": "The response should cite specific competitive differentiators from the knowledge base."
     },
     {
-        "inputs": "Show me Mid-Market accounts in North America with over $100M revenue.",
-        "ground_truth": "The response should list specific Mid-Market accounts in North America with annual revenue exceeding $100M, including company names and details."
+        "inputs": [{"role": "user", "content": "Show me Mid-Market accounts in North America with over $100M revenue."}],
+        "ground_truth": "The response should list specific Mid-Market accounts in North America with annual revenue exceeding $100M."
     },
     {
-        "inputs": "What pricing model do we use for our enterprise products?",
-        "ground_truth": "The response should describe the pricing structure from the knowledge base, including any tier-based pricing, consumption-based models, or packaging details."
-    },
-    {
-        "inputs": "Analyze the full sales pipeline and identify which stage has the highest total value.",
-        "ground_truth": "The response should show a breakdown of all pipeline stages with their total values and clearly identify which stage has the highest aggregate deal value."
-    },
-    {
-        "inputs": "What resources do we have for selling to Financial Services companies?",
-        "ground_truth": "The response should reference knowledge base documents about financial services sales approaches, compliance considerations, or industry-specific value propositions."
+        "inputs": [{"role": "user", "content": "Analyze the full sales pipeline and identify which stage has the highest total value."}],
+        "ground_truth": "The response should show a breakdown of all pipeline stages with their total values and identify the highest."
     }
 ]
 
@@ -1495,105 +1504,82 @@ display(eval_df)
 
 # COMMAND ----------
 
-# DBTITLE 1,6.2 — Run Agent on Eval Questions
+# DBTITLE 1,7.2 — Evaluate with mlflow.genai.evaluate()
 # MAGIC %md
-# MAGIC ### 6.2 — Run the Agent on Evaluation Questions
+# MAGIC ### 7.2 — Evaluate with `mlflow.genai.evaluate()` (Built-in Scorers)
 # MAGIC
-# MAGIC We need to generate responses from our agent for each evaluation question before we can judge them.
+# MAGIC The modern evaluation API provides pre-built scorers that automatically assess response quality.
 
 # COMMAND ----------
 
-# DBTITLE 1,Generate Agent Predictions
-# Run the agent on each evaluation question and collect responses
-print("Running agent on evaluation questions...\n")
+# DBTITLE 1,Run mlflow.genai.evaluate
+from mlflow.genai.scorers import RelevanceToQuery, Safety
 
-eval_responses = []
-for i, row in eval_df.iterrows():
-    question = row["inputs"]
-    print(f"  [{i+1}/{len(eval_df)}] {question[:70]}...")
+def predict_fn(inputs):
+    """Wrapper for the agent that mlflow.genai.evaluate can call."""
+    result = agent.predict(ResponsesAgentRequest(input=inputs))
+    return result.output
 
-    try:
-        response = run_agent(question, verbose=False)
-        eval_responses.append(response)
-        print(f"          Response length: {len(response)} chars")
-    except Exception as e:
-        eval_responses.append(f"Error: {str(e)}")
-        print(f"          Error: {str(e)[:60]}")
-
-eval_df["predictions"] = eval_responses
-print(f"\nCompleted {len(eval_responses)} evaluations.")
-
-# COMMAND ----------
-
-# DBTITLE 1,Show Sample Response
-# Show a sample response
-print("SAMPLE — Question 1:")
-print(f"  Q: {eval_df.iloc[0]['inputs']}")
-print(f"  A: {eval_df.iloc[0]['predictions'][:500]}...")
-
-# COMMAND ----------
-
-# DBTITLE 1,6.3 — Evaluate with MLflow
-# MAGIC %md
-# MAGIC ### 6.3 — Evaluate with MLflow (LLM-as-Judge)
-# MAGIC
-# MAGIC Now we use `mlflow.evaluate()` to have an LLM judge the quality of each response.
-# MAGIC The judge model assesses faithfulness, relevance, and other quality dimensions.
-
-# COMMAND ----------
-
-# DBTITLE 1,Run MLflow Evaluate
-# Prepare the evaluation data in the format mlflow.evaluate expects
-eval_data_for_mlflow = eval_df[["inputs", "predictions", "ground_truth"]].copy()
-
-# Run MLflow evaluation
 try:
-    with mlflow.start_run(run_name="agent_evaluation_v1") as eval_run:
-        eval_results = mlflow.evaluate(
-            data=eval_data_for_mlflow,
-            predictions="predictions",
-            targets="ground_truth",
-            model_type="question-answering",
-            extra_metrics=[],
+    with mlflow.start_run(run_name="agent_eval_genai_v1"):
+        eval_results = mlflow.genai.evaluate(
+            data=eval_df,
+            predict_fn=predict_fn,
+            scorers=[RelevanceToQuery(), Safety()],
         )
 
-        print("EVALUATION RESULTS")
+        print("EVALUATION RESULTS (mlflow.genai.evaluate)")
         print("=" * 60)
-        print(f"\nAggregate Metrics:")
         for metric_name, metric_value in eval_results.metrics.items():
             if isinstance(metric_value, float):
                 print(f"  {metric_name:<40} {metric_value:.4f}")
             else:
                 print(f"  {metric_name:<40} {metric_value}")
 
-        print(f"\nEval Run ID: {eval_run.info.run_id}")
-        print(f"View detailed results in MLflow Experiments UI.")
-
 except Exception as e:
-    print(f"MLflow evaluation note: {e}")
-    print("\nFalling back to a manual evaluation approach...")
+    print(f"mlflow.genai.evaluate note: {e}")
+    print("\nThis API requires mlflow>=2.18. Proceeding with custom LLM-as-Judge below.")
 
 # COMMAND ----------
 
-# DBTITLE 1,Display Evaluation Results Table
-# Display the per-question evaluation results
+# DBTITLE 1,Display Evaluation Results
 try:
     eval_table = eval_results.tables.get("eval_results_table")
     if eval_table is not None:
         display(eval_table)
-    else:
-        print("Evaluation table available in the MLflow UI under the Evaluation tab.")
 except Exception:
-    pass
+    print("Results available in the MLflow Experiments UI.")
 
 # COMMAND ----------
 
-# DBTITLE 1,6.4 — Custom LLM-as-Judge
+# DBTITLE 1,7.3 — Custom LLM-as-Judge
 # MAGIC %md
-# MAGIC ### 6.4 — Custom LLM-as-Judge Evaluation
+# MAGIC ### 7.3 — Custom LLM-as-Judge Evaluation
 # MAGIC
-# MAGIC We can also build our own evaluation using the LLM directly. This gives us full control
-# MAGIC over evaluation criteria — useful for domain-specific quality requirements.
+# MAGIC Built-in scorers cover common quality dimensions. For **domain-specific** requirements
+# MAGIC (e.g., "Does the response use MEDDPICC terminology?"), we build our own LLM judge.
+
+# COMMAND ----------
+
+# DBTITLE 1,Generate Agent Predictions for Custom Eval
+# Generate agent responses for each eval question
+print("Running agent on evaluation questions...\n")
+
+eval_predictions = []
+for i, row in eval_df.iterrows():
+    question_text = row["inputs"][0]["content"] if isinstance(row["inputs"], list) else str(row["inputs"])
+    print(f"  [{i+1}/{len(eval_df)}] {question_text[:70]}...")
+
+    try:
+        result = agent.predict(ResponsesAgentRequest(input=row["inputs"]))
+        eval_predictions.append(result.output)
+        print(f"          Response length: {len(result.output)} chars")
+    except Exception as e:
+        eval_predictions.append(f"Error: {str(e)}")
+        print(f"          Error: {str(e)[:60]}")
+
+eval_df["predictions"] = eval_predictions
+print(f"\nCompleted {len(eval_predictions)} evaluations.")
 
 # COMMAND ----------
 
@@ -1601,7 +1587,6 @@ except Exception:
 def evaluate_response(question: str, response: str, ground_truth: str) -> dict:
     """
     Use the LLM to evaluate an agent response on multiple dimensions.
-
     Returns a dict with scores (1-5) for relevance, completeness, and accuracy.
     """
     eval_prompt = f"""You are an expert evaluator for a GTM (Go-To-Market) AI assistant.
@@ -1623,14 +1608,13 @@ Respond ONLY in this exact JSON format:
 
     try:
         eval_response = client.chat.completions.create(
-            model="databricks-meta-llama-3-3-70b-instruct",
+            model=llm_endpoint,
             messages=[{"role": "user", "content": eval_prompt}],
             max_tokens=200,
             temperature=0.0
         )
         result_text = eval_response.choices[0].message.content.strip()
 
-        # Parse JSON from the response
         import re
         json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
         if json_match:
@@ -1642,14 +1626,14 @@ Respond ONLY in this exact JSON format:
 
 # COMMAND ----------
 
-# DBTITLE 1,Run Custom LLM-as-Judge Evaluation
-# Run custom LLM-as-Judge evaluation on all test cases
+# DBTITLE 1,Run Custom LLM-as-Judge
 print("Running LLM-as-Judge evaluation...\n")
 
 eval_scores = []
 for i, row in eval_df.iterrows():
-    scores = evaluate_response(row["inputs"], row["predictions"], row["ground_truth"])
-    scores["question"] = row["inputs"][:60] + "..."
+    question_text = row["inputs"][0]["content"] if isinstance(row["inputs"], list) else str(row["inputs"])
+    scores = evaluate_response(question_text, row["predictions"], row["ground_truth"])
+    scores["question"] = question_text[:60] + "..."
     eval_scores.append(scores)
     print(f"  [{i+1}] Rel:{scores.get('relevance','-')}/5  "
           f"Comp:{scores.get('completeness','-')}/5  "
@@ -1658,7 +1642,6 @@ for i, row in eval_df.iterrows():
 # COMMAND ----------
 
 # DBTITLE 1,Evaluation Summary Statistics
-# Summary statistics
 scores_df = pd.DataFrame(eval_scores)
 
 print("\nEVALUATION SUMMARY")
@@ -1681,17 +1664,15 @@ if len(overall_valid) > 0:
 # COMMAND ----------
 
 # DBTITLE 1,Display Detailed Evaluation Table
-# Display detailed evaluation table
 display(scores_df[["question", "relevance", "completeness", "accuracy", "reasoning"]])
 
 # COMMAND ----------
 
-# DBTITLE 1,6.5 — Quality Thresholds
+# DBTITLE 1,7.4 — Quality Thresholds
 # MAGIC %md
-# MAGIC ### 6.5 — Setting Quality Thresholds for Production
+# MAGIC ### 7.4 — Setting Quality Thresholds for Production
 # MAGIC
-# MAGIC Before deploying an agent, establish minimum quality thresholds. Evaluations run automatically
-# MAGIC in your CI/CD pipeline, and the agent only deploys if it meets the bar.
+# MAGIC Before deploying an agent, establish minimum quality thresholds.
 # MAGIC
 # MAGIC **Recommended Production Thresholds:**
 # MAGIC
@@ -1700,16 +1681,15 @@ display(scores_df[["question", "relevance", "completeness", "accuracy", "reasoni
 # MAGIC | Relevance | 4.0 / 5.0 | Block deployment, review system prompt |
 # MAGIC | Completeness | 3.5 / 5.0 | Review tool definitions, add more tools |
 # MAGIC | Accuracy | 4.0 / 5.0 | Check data freshness, review RAG pipeline |
-# MAGIC | Faithfulness | 4.5 / 5.0 | Reduce temperature, add citation requirements |
 # MAGIC | Safety | 5.0 / 5.0 | Mandatory — always block unsafe outputs |
 # MAGIC
 # MAGIC ---
 
 # COMMAND ----------
 
-# DBTITLE 1,Section 7: Wrap-Up and Summary
+# DBTITLE 1,Section 8: Wrap-Up and Summary
 # MAGIC %md
-# MAGIC # Section 7: Wrap-Up — Full Workshop Summary
+# MAGIC # Section 8: Wrap-Up — Full Workshop Summary
 # MAGIC
 # MAGIC ## What We Built Today
 # MAGIC
@@ -1722,8 +1702,8 @@ display(scores_df[["question", "relevance", "completeness", "accuracy", "reasoni
 # MAGIC ### Afternoon Session
 # MAGIC | Module | What We Did | Databricks Features Used |
 # MAGIC |--------|-------------|--------------------------|
-# MAGIC | **Module 3** | Built GenAI foundations and agent tools | Foundation Models API, Vector Search, AI Functions |
-# MAGIC | **Module 4** | Built, evaluated, and governed a custom agent | Tool Calling, MLflow Tracing, LLM-as-Judge, AI Gateway |
+# MAGIC | **Module 3** | Built GenAI foundations, agent tools, UC functions | Foundation Models API, Vector Search, AI Functions, UC Functions, MCP |
+# MAGIC | **Module 4** | Built, deployed, evaluated, and governed a custom agent | MCP, ResponsesAgent, agents.deploy(), MLflow Tracing, AI Gateway, mlflow.genai.evaluate |
 # MAGIC
 # MAGIC ## The Complete Stack
 # MAGIC ```
@@ -1739,11 +1719,11 @@ display(scores_df[["question", "relevance", "completeness", "accuracy", "reasoni
 # MAGIC  │   └──────────┘ └──────────┘ └──────────┘ └───────────────────┘   │
 # MAGIC  │                                                                     │
 # MAGIC  │   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────────────────┐   │
-# MAGIC  │   │  Vector  │ │  Agent   │ │  Auto    │ │  Databricks       │   │
-# MAGIC  │   │  Search  │ │  Bricks  │ │  ML      │ │  Apps             │   │
-# MAGIC  │   │          │ │  & MCP   │ │          │ │                   │   │
-# MAGIC  │   │ RAG      │ │ Agent    │ │ No-code  │ │ Full-stack        │   │
-# MAGIC  │   │ Pipeline │ │ Compose  │ │ ML       │ │ Deployment        │   │
+# MAGIC  │   │  Vector  │ │   MCP    │ │ agents.  │ │  Databricks       │   │
+# MAGIC  │   │  Search  │ │  Tool    │ │ deploy() │ │  Apps             │   │
+# MAGIC  │   │          │ │ Discovery│ │          │ │                   │   │
+# MAGIC  │   │ RAG      │ │ Auto-    │ │ One-line │ │ Full-stack        │   │
+# MAGIC  │   │ Pipeline │ │ discover │ │ deploy   │ │ Deployment        │   │
 # MAGIC  │   └──────────┘ └──────────┘ └──────────┘ └───────────────────┘   │
 # MAGIC  └───────────────────────────────────────────────────────────────────┘
 # MAGIC ```
@@ -1772,6 +1752,7 @@ display(scores_df[["question", "relevance", "completeness", "accuracy", "reasoni
 # MAGIC - [Agent Evaluation](https://docs.databricks.com/en/generative-ai/agent-evaluation/index.html)
 # MAGIC - [Databricks Apps](https://docs.databricks.com/en/dev-tools/databricks-apps/index.html)
 # MAGIC - [AI Gateway](https://docs.databricks.com/en/ai-gateway/index.html)
+# MAGIC - [MCP on Databricks](https://docs.databricks.com/en/generative-ai/mcp.html)
 # MAGIC
 # MAGIC ---
 # MAGIC

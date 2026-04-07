@@ -21,10 +21,14 @@ embedding_endpoint = "databricks-gte-large-en"
 
 # --- Vector Search ---
 vs_endpoint_name = "mas-3876475e-endpoint"
-vs_index_name = f"{catalog}.{schema}.gtm_knowledge_index"
+vs_index_name = f"{catalog}.{schema}.gtm_knowledge_vs_index"
 
 # --- Model Serving ---
 serving_endpoint_name = "servicenow-training-lead-scoring"
+
+# --- Agent Deployment ---
+agent_endpoint_name = "servicenow-training-gtm-agent"
+registered_agent_model_name = f"{catalog}.{schema}.gtm_assistant_agent"
 
 # --- Convenience ---
 username = spark.sql("SELECT current_user()").first()[0]
@@ -45,6 +49,8 @@ api_token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().ap
 # MAGIC | LLM | `databricks-meta-llama-3-3-70b-instruct` |
 # MAGIC | Embeddings | `databricks-gte-large-en` |
 # MAGIC | Vector Search | `mas-3876475e-endpoint` |
+# MAGIC | Agent Endpoint | `servicenow-training-gtm-agent` |
+# MAGIC | Agent Model | `{catalog}.{schema}.gtm_assistant_agent` |
 
 # COMMAND ----------
 
@@ -55,3 +61,5 @@ print(f"   User:       {username}")
 print(f"   Workspace:  {workspace_url}")
 print(f"   LLM:        {llm_endpoint}")
 print(f"   Embeddings: {embedding_endpoint}")
+print(f"   VS Index:   {vs_index_name}")
+print(f"   Agent Model:{registered_agent_model_name}")

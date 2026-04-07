@@ -30,7 +30,7 @@
 # COMMAND ----------
 
 # DBTITLE 1,Install Vector Search SDK
-# MAGIC %pip install databricks-vectorsearch openai databricks-sdk --quiet
+# MAGIC %pip install databricks-vectorsearch openai databricks-sdk databricks-openai --quiet
 
 # COMMAND ----------
 
@@ -1084,6 +1084,104 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
+# DBTITLE 1,Section 4.5: Register Tools as UC Functions
+# MAGIC %md
+# MAGIC ### 4.5 — Register Tools as Unity Catalog Functions
+# MAGIC
+# MAGIC The Python tools above work great inside a notebook, but they **can't be deployed** or governed.
+# MAGIC Unity Catalog **functions** solve this — they are:
+# MAGIC
+# MAGIC - **Governed**: Inherit UC permissions, audit-logged
+# MAGIC - **Discoverable**: Agents find them via MCP (Model Context Protocol)
+# MAGIC - **Deployable**: Work in Model Serving, not just notebooks
+# MAGIC - **Self-describing**: Parameter COMMENTs become tool descriptions for LLMs
+# MAGIC
+# MAGIC We'll register SQL equivalents of our Python tools as UC functions.
+
+# COMMAND ----------
+
+# DBTITLE 1,Create UC Function: query_accounts
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE FUNCTION ${catalog}.${schema}.query_accounts(
+# MAGIC   industry STRING DEFAULT NULL COMMENT 'Filter by industry (e.g. Technology, Financial Services, Healthcare)',
+# MAGIC   min_revenue DOUBLE DEFAULT NULL COMMENT 'Minimum annual revenue in dollars',
+# MAGIC   account_tier STRING DEFAULT NULL COMMENT 'Filter by tier: Enterprise, Mid-Market, or SMB',
+# MAGIC   region STRING DEFAULT NULL COMMENT 'Filter by region: North America, EMEA, APAC, LATAM',
+# MAGIC   max_results INT DEFAULT 10 COMMENT 'Maximum number of results to return'
+# MAGIC )
+# MAGIC RETURNS TABLE(
+# MAGIC   account_id STRING,
+# MAGIC   company_name STRING,
+# MAGIC   industry STRING,
+# MAGIC   employee_count INT,
+# MAGIC   annual_revenue DOUBLE,
+# MAGIC   region STRING,
+# MAGIC   country STRING,
+# MAGIC   account_tier STRING
+# MAGIC )
+# MAGIC COMMENT 'Query GTM accounts from the data warehouse. Use when the user asks about specific accounts, companies, industries, or revenue data. Returns structured account information including company name, industry, revenue, and tier.'
+# MAGIC RETURN
+# MAGIC   SELECT account_id, company_name, industry, employee_count,
+# MAGIC          annual_revenue, region, country, account_tier
+# MAGIC   FROM ${catalog}.${schema}.gtm_accounts
+# MAGIC   WHERE (industry IS NULL OR industry = query_accounts.industry)
+# MAGIC     AND (min_revenue IS NULL OR annual_revenue >= min_revenue)
+# MAGIC     AND (account_tier IS NULL OR account_tier = query_accounts.account_tier)
+# MAGIC     AND (region IS NULL OR region = query_accounts.region)
+# MAGIC   ORDER BY annual_revenue DESC
+# MAGIC   LIMIT max_results
+
+# COMMAND ----------
+
+# DBTITLE 1,Create UC Function: analyze_pipeline
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE FUNCTION ${catalog}.${schema}.analyze_pipeline(
+# MAGIC   stage STRING DEFAULT NULL COMMENT 'Filter by deal stage: Prospecting, Discovery, Proposal, Negotiation, Closed Won, Closed Lost. Leave empty for all stages.'
+# MAGIC )
+# MAGIC RETURNS TABLE(
+# MAGIC   stage STRING,
+# MAGIC   deal_count INT,
+# MAGIC   total_amount DOUBLE,
+# MAGIC   avg_deal_size DOUBLE,
+# MAGIC   avg_probability_pct DOUBLE,
+# MAGIC   weighted_pipeline DOUBLE
+# MAGIC )
+# MAGIC COMMENT 'Analyze the sales pipeline with deal metrics and stage breakdowns. Use when the user asks about pipeline health, deal stages, revenue forecasts, or pipeline analytics.'
+# MAGIC RETURN
+# MAGIC   SELECT stage,
+# MAGIC          CAST(COUNT(*) AS INT) as deal_count,
+# MAGIC          ROUND(SUM(amount), 0) as total_amount,
+# MAGIC          ROUND(AVG(amount), 0) as avg_deal_size,
+# MAGIC          ROUND(AVG(probability) * 100, 1) as avg_probability_pct,
+# MAGIC          ROUND(SUM(amount * probability), 0) as weighted_pipeline
+# MAGIC   FROM ${catalog}.${schema}.gtm_opportunities
+# MAGIC   WHERE (stage IS NULL OR stage = analyze_pipeline.stage)
+# MAGIC   GROUP BY stage
+# MAGIC   ORDER BY avg_probability_pct DESC
+
+# COMMAND ----------
+
+# DBTITLE 1,Test UC Functions
+# MAGIC %sql
+# MAGIC -- Test query_accounts: Enterprise Technology accounts
+# MAGIC SELECT * FROM ${catalog}.${schema}.query_accounts('Technology', NULL, 'Enterprise', NULL, 5)
+
+# COMMAND ----------
+
+# DBTITLE 1,Test UC Pipeline Analysis
+# MAGIC %sql
+# MAGIC -- Test analyze_pipeline: all stages
+# MAGIC SELECT * FROM ${catalog}.${schema}.analyze_pipeline(NULL)
+
+# COMMAND ----------
+
+# DBTITLE 1,Verify UC Function Registration
+# MAGIC %sql
+# MAGIC -- Show all user functions we registered in our schema
+# MAGIC SHOW USER FUNCTIONS IN ${catalog}.${schema}
+
+# COMMAND ----------
+
 # DBTITLE 1,Section 5: Agent Bricks and MCP
 # MAGIC %md
 # MAGIC ---
@@ -1182,31 +1280,41 @@ print(response.choices[0].message.content)
 # MAGIC - **External MCP servers**: Connect to Slack, Jira, Salesforce, GitHub, etc. via community
 # MAGIC   MCP servers — with Databricks handling auth and rate limiting.
 # MAGIC
-# MAGIC ### Conceptual Example: Agent Using MCP Tools
+# MAGIC ### Live Demo: MCP Tool Discovery from Unity Catalog
 # MAGIC
-# MAGIC ```python
-# MAGIC # Conceptual — MCP integration with Databricks agents
-# MAGIC from databricks.agents import Agent, MCPToolkit
-# MAGIC
-# MAGIC # Create a toolkit that discovers tools via MCP
-# MAGIC toolkit = MCPToolkit(
-# MAGIC     servers=[
-# MAGIC         "unity-catalog://ankit_yadav.servicenow_training",  # Delta tables
-# MAGIC         "mcp://slack-server",                                # Slack integration
-# MAGIC         "mcp://jira-server",                                 # Jira integration
-# MAGIC     ]
-# MAGIC )
-# MAGIC
-# MAGIC # The agent automatically discovers available tools from all MCP servers
-# MAGIC agent = Agent(
-# MAGIC     model="databricks-meta-llama-3-3-70b-instruct",
-# MAGIC     tools=toolkit.get_tools(),  # Auto-discovered!
-# MAGIC     instructions="You are a GTM assistant..."
-# MAGIC )
-# MAGIC ```
-# MAGIC
-# MAGIC > **Key Takeaway:** MCP eliminates the need to manually define tool schemas. As your enterprise
-# MAGIC > data landscape evolves, agents automatically discover new capabilities.
+# MAGIC Let's connect to the Unity Catalog MCP server and discover the functions we just registered.
+# MAGIC The `databricks-openai` package provides `McpServerToolkit` for this.
+
+# COMMAND ----------
+
+# DBTITLE 1,MCP Tool Discovery from Unity Catalog
+from databricks_openai import McpServerToolkit
+from databricks.sdk import WorkspaceClient
+
+w = WorkspaceClient()
+host = w.config.host
+
+# Connect to the UC Functions MCP server for our schema
+uc_toolkit = McpServerToolkit(url=f"{host}/api/2.0/mcp/functions/{catalog}/{schema}")
+uc_tools = uc_toolkit.get_tools()
+
+print(f"Discovered {len(uc_tools)} UC function tools via MCP:\n")
+for tool in uc_tools:
+    print(f"  Tool: {tool.name}")
+    if hasattr(tool, 'description') and tool.description:
+        print(f"    Description: {tool.description[:100]}...")
+    print()
+
+print("These tools are now available for any MCP-compatible agent — no manual schema definitions needed.")
+
+# COMMAND ----------
+
+# DBTITLE 1,MCP: What Just Happened
+# MAGIC %md
+# MAGIC > **What just happened?** With two lines of code, MCP discovered our UC functions — complete with
+# MAGIC > parameter names, types, and descriptions (from the SQL COMMENTs). Compare that to the 80+ lines
+# MAGIC > of manual JSON schemas we wrote in Section 4. As your data catalog grows, agents automatically
+# MAGIC > discover new capabilities.
 
 # COMMAND ----------
 
@@ -1223,6 +1331,8 @@ print(response.choices[0].message.content)
 # MAGIC | SQL Query Tool | Built | Query accounts by industry, revenue, tier |
 # MAGIC | Knowledge Search Tool | Built | Semantic retrieval from knowledge base |
 # MAGIC | Pipeline Analysis Tool | Built | Analyze deals by stage with metrics |
+# MAGIC | UC Functions | Registered | Governed, MCP-discoverable SQL tools |
+# MAGIC | MCP Discovery | Demonstrated | Auto-discover tools from Unity Catalog |
 # MAGIC
 # MAGIC ### Next Up: Module 4
 # MAGIC In the next notebook, we'll wire these tools into a **fully functional agent** that can:

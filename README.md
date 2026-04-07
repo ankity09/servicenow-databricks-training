@@ -13,9 +13,9 @@ A one-day, hands-on workshop covering distributed ML, production MLOps, GenAI fo
 | 11:30 am – 11:45 am | *Break* | | |
 | 11:45 am – 1:15 pm | **Module 2** | `02_Advanced_MLOps_Production_Governance` | Hyperopt tuning, MLflow tracking, Unity Catalog model registry, Model Serving, monitoring |
 | 1:15 pm – 2:00 pm | *Lunch* | | |
-| 2:00 pm – 3:30 pm | **Module 3** | `03_GenAI_Foundations_Agent_Design` | Foundation Model APIs, prompt engineering, Vector Search, agent tools, Agent Bricks & MCP |
+| 2:00 pm – 3:30 pm | **Module 3** | `03_GenAI_Foundations_Agent_Design` | Foundation Model APIs, prompt engineering, Vector Search, agent tools, UC Functions, Agent Bricks & MCP |
 | 3:30 pm – 3:45 pm | *Break* | | |
-| 3:45 pm – 5:00 pm | **Module 4** | `04_Custom_Agents_Evaluation_Governance` | Custom agents (OpenAI SDK), MLflow Responses Agent, AI Gateway, tracing, LLM-as-judge evaluation |
+| 3:45 pm – 5:00 pm | **Module 4** | `04_Custom_Agents_Evaluation_Governance` | Custom agents (OpenAI SDK), MCP tool discovery, MLflow ResponsesAgent, agents.deploy(), AI Gateway, tracing, mlflow.genai.evaluate |
 | 5:00 pm – 5:15 pm | **Wrap Up** | | Review, Q&A, next steps |
 
 ---
@@ -129,10 +129,10 @@ Covers Spark internals (execution plans, partitioning, shuffles, broadcast vs. s
 Scales hyperparameter tuning with Hyperopt (and compares it to Optuna), tracks experiments in MLflow, registers models to Unity Catalog, deploys a real-time Model Serving endpoint, and configures A/B testing with Inference Tables. Covers the full path from experimentation to production monitoring.
 
 ### `03_GenAI_Foundations_Agent_Design` — Module 3
-Introduces Foundation Model APIs and prompt engineering patterns (zero-shot, few-shot, chain-of-thought). Builds a Vector Search index over the GTM knowledge base for retrieval-augmented generation (RAG). Creates agent tools for both structured SQL queries and unstructured document retrieval, and introduces the Agent Bricks framework and Model Context Protocol (MCP).
+Introduces Foundation Model APIs and prompt engineering patterns (zero-shot, few-shot, chain-of-thought). Builds a Vector Search index over the GTM knowledge base for retrieval-augmented generation (RAG). Creates agent tools as both Python functions and Unity Catalog SQL functions (governed and MCP-discoverable). Introduces the Agent Bricks framework and demonstrates live MCP tool discovery from Unity Catalog.
 
 ### `04_Custom_Agents_Evaluation_Governance` — Module 4
-Builds a complete GTM assistant agent using the OpenAI SDK with tool calling, wraps it as an MLflow `ResponsesAgent` for deployment, and covers AI Gateway for governance and guardrails. Enables end-to-end MLflow tracing and evaluates agent quality with LLM-as-judge scoring across relevance, groundedness, and safety dimensions.
+Builds a custom GTM assistant agent with a manual tool-calling loop (educational), then upgrades to MCP-based tool discovery and the `MCPToolCallingAgent(ResponsesAgent)` pattern for production packaging. Deploys the agent to a serving endpoint via `agents.deploy()`. Covers AI Gateway for governance and guardrails, MLflow 3.0 tracing for observability, and evaluates agent quality with both `mlflow.genai.evaluate()` (built-in scorers) and custom LLM-as-Judge scoring.
 
 ---
 
