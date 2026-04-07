@@ -487,7 +487,7 @@ def run_agent(user_message: str, conversation_history: list = None, verbose: boo
         The agent's final response text
     """
     # System prompt defines the agent's behavior
-    system_prompt = """You are a senior GTM (Go-To-Market) Strategy Assistant for an enterprise software company.
+    system_prompt = """You are a senior GTM (Go-To-Market) Strategy Assistant for ServiceNow.
 You have access to three tools:
 1. query_accounts — for retrieving account/company data from the data warehouse
 2. search_knowledge_base — for finding product docs, sales playbooks, and competitive intelligence
@@ -498,6 +498,7 @@ Guidelines:
 - You can call multiple tools if the question requires different types of information
 - Always cite your data sources (which tool provided the data)
 - Be concise but thorough — executives read your outputs
+- Frame insights in terms of ITSM metrics (MTTR, CSAT, SLA compliance) when relevant
 - Format responses with clear headers, bullet points, and data highlights
 - If a tool returns an error or no results, explain what happened and suggest alternatives"""
 
@@ -621,7 +622,7 @@ response_1 = run_agent(
 
 # DBTITLE 1,Test search_knowledge_base Tool
 response_2 = run_agent(
-    "What's our sales methodology for handling pricing objections from enterprise customers?"
+    "What's our sales methodology for handling objections when competing against BMC Remedy?"
 )
 
 # COMMAND ----------
@@ -642,7 +643,7 @@ response_2 = run_agent(
 
 # DBTITLE 1,Test Multi-Tool Agent Call
 response_3 = run_agent(
-    "Give me a pipeline analysis for deals in the Negotiation stage, and recommend specific actions we should take based on our sales playbooks to close these deals faster."
+    "Give me a pipeline analysis for deals in the Negotiation stage, and recommend specific actions from our ITSM sales playbooks to close these deals faster."
 )
 
 # COMMAND ----------
@@ -778,7 +779,7 @@ class MCPToolCallingAgent(ResponsesAgent):
     Implements the ResponsesAgent interface for Databricks Model Serving.
     """
 
-    SYSTEM_PROMPT = """You are a senior GTM (Go-To-Market) Strategy Assistant for an enterprise software company.
+    SYSTEM_PROMPT = """You are a senior GTM (Go-To-Market) Strategy Assistant for ServiceNow.
 You have access to tools for querying account data, searching knowledge documents, and analyzing the sales pipeline.
 
 Guidelines:
@@ -786,6 +787,7 @@ Guidelines:
 - You can call multiple tools if the question requires different types of information
 - Always cite your data sources (which tool provided the data)
 - Be concise but thorough — executives read your outputs
+- Frame insights in terms of ITSM metrics (MTTR, CSAT, SLA compliance) when relevant
 - Format responses with clear headers, bullet points, and data highlights
 - If a tool returns an error or no results, explain what happened and suggest alternatives"""
 
@@ -931,7 +933,7 @@ print(MCPToolCallingAgent.get_text(result))
 # DBTITLE 1,3.3 — Test Multi-Tool Query
 # Test a query that requires multiple tools
 result = agent.predict(
-    ResponsesAgentRequest(input=[{"role": "user", "content": "Give me a pipeline analysis for deals in the Negotiation stage, and recommend specific actions from our sales playbooks to close these deals faster."}])
+    ResponsesAgentRequest(input=[{"role": "user", "content": "Give me a pipeline analysis for deals in the Negotiation stage, and recommend specific actions from our ITSM sales playbooks to close these deals faster."}])
 )
 
 print("MULTI-TOOL RESPONSE:")
@@ -968,7 +970,7 @@ nest_asyncio.apply()
 class MCPToolCallingAgent(ResponsesAgent):
     """A GTM Strategy Assistant Agent using MCP for tool discovery."""
 
-    SYSTEM_PROMPT = """You are a senior GTM (Go-To-Market) Strategy Assistant for an enterprise software company.
+    SYSTEM_PROMPT = """You are a senior GTM (Go-To-Market) Strategy Assistant for ServiceNow.
 You have access to tools for querying account data, searching knowledge documents, and analyzing the sales pipeline.
 Use tools to gather data before answering. Be concise, cite your sources, and format responses for executives."""
 
@@ -1441,7 +1443,7 @@ print("All subsequent OpenAI API calls will be automatically traced.")
 print("Running MCP agent with MLflow tracing enabled...\n")
 
 traced_result = agent.predict(
-    ResponsesAgentRequest(input=[{"role": "user", "content": "What Technology accounts do we have in EMEA, and what sales resources do we have for that industry?"}])
+    ResponsesAgentRequest(input=[{"role": "user", "content": "What Technology accounts do we have in EMEA, and what ITSM sales resources do we have for that vertical?"}])
 )
 
 print("TRACED RESPONSE:")
@@ -1512,23 +1514,23 @@ import pandas as pd
 eval_questions = [
     {
         "inputs": [{"role": "user", "content": "What are our top Enterprise accounts in the Technology industry?"}],
-        "ground_truth": "The response should list specific Technology industry accounts with Enterprise tier, including company names, revenue figures, and employee counts."
+        "ground_truth": "The response should list specific Technology industry accounts with Enterprise tier, including company names, revenue figures, and employee counts from the GTM database."
     },
     {
-        "inputs": [{"role": "user", "content": "What's our sales methodology for handling objections?"}],
-        "ground_truth": "The response should reference specific objection handling techniques from the sales playbook knowledge base."
+        "inputs": [{"role": "user", "content": "What's our sales methodology for handling objections when competing against BMC Remedy?"}],
+        "ground_truth": "The response should reference specific objection handling techniques from the sales playbook knowledge base, such as positioning against BMC's legacy architecture, highlighting Now Platform AI capabilities, and TCO analysis."
     },
     {
         "inputs": [{"role": "user", "content": "Give me a pipeline analysis for the Negotiation stage."}],
         "ground_truth": "The response should include total deal count, total pipeline value, weighted pipeline, and average deal size for deals in the Negotiation stage."
     },
     {
-        "inputs": [{"role": "user", "content": "What competitive advantages do we have over Snowflake?"}],
-        "ground_truth": "The response should cite specific competitive differentiators from the knowledge base."
+        "inputs": [{"role": "user", "content": "What competitive advantages do we have over Jira Service Management?"}],
+        "ground_truth": "The response should cite specific competitive differentiators from the knowledge base, such as enterprise ITSM depth, ITOM integration, AI capabilities, and platform breadth beyond ticketing."
     },
     {
         "inputs": [{"role": "user", "content": "Show me Mid-Market accounts in North America with over $100M revenue."}],
-        "ground_truth": "The response should list specific Mid-Market accounts in North America with annual revenue exceeding $100M."
+        "ground_truth": "The response should list specific Mid-Market accounts in North America with annual revenue exceeding $100M, including company names and details."
     },
     {
         "inputs": [{"role": "user", "content": "Analyze the full sales pipeline and identify which stage has the highest total value."}],

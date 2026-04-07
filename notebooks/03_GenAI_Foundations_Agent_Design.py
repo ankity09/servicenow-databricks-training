@@ -239,10 +239,10 @@ print(response.choices[0].message.content)
 # DBTITLE 1,Zero-Shot Lead Classification
 # Zero-shot: Classify a lead based on a description
 lead_description = """
-Sarah Chen, VP of Engineering at a Fortune 500 financial services company.
-She attended our webinar on real-time data pipelines, downloaded the Lakehouse whitepaper,
-and requested a custom demo. Her team currently uses Snowflake but is evaluating alternatives
-for their ML workloads. Budget is approved for Q2.
+Sarah Chen, VP of IT Operations at a Fortune 500 financial services company.
+She attended our webinar on AI-powered ITSM, downloaded the Now Platform whitepaper,
+and requested a custom demo. Her team currently uses BMC Remedy but is evaluating alternatives
+for their IT service management modernization. Budget is approved for Q2.
 """
 
 response = client.chat.completions.create(
@@ -281,10 +281,11 @@ print(response.choices[0].message.content)
 # Few-shot: Extract key information from sales notes
 sales_notes = """
 Had a great call with Mike Rodriguez (CTO) at Acme Corp today. They're running
-on AWS with a mix of Redshift and EMR. Pain points are data silos between their
-analytics and ML teams, plus governance headaches with PII data. They have a
-$2M annual budget for data infrastructure. Next step is a technical deep-dive
-with their platform team next Thursday.
+on BMC Remedy with a mix of custom scripts and manual workflows. Pain points are
+slow incident resolution times and zero visibility into their IT service health.
+They're also frustrated with Remedy's upgrade complexity and want modern AI capabilities
+like virtual agents. They have a $2M annual budget for ITSM modernization. Next step
+is a technical deep-dive with their platform team next Thursday.
 """
 
 response = client.chat.completions.create(
@@ -295,25 +296,25 @@ response = client.chat.completions.create(
             "content": f"""Extract structured information from sales call notes. Follow these examples exactly.
 
 EXAMPLE 1:
-Notes: "Spoke with Jane Lee, Head of Data at GlobalBank. They use Azure Synapse.
-Main concern is cost — spending $500K/yr. Want to evaluate Databricks for cost savings.
-Follow-up meeting scheduled for Monday."
+Notes: "Spoke with Jane Lee, Head of IT Operations at GlobalBank. They use BMC Remedy.
+Main concern is ITSM modernization and AI capabilities — current platform can't support
+virtual agents or predictive intelligence. Follow-up meeting scheduled for Monday."
 Extracted:
-- Contact: Jane Lee (Head of Data)
+- Contact: Jane Lee (Head of IT Operations)
 - Company: GlobalBank
-- Current Stack: Azure Synapse
-- Pain Points: High costs ($500K/yr)
+- Current Stack: BMC Remedy
+- Pain Points: ITSM modernization and AI capabilities
 - Budget: Not specified
 - Next Step: Follow-up meeting Monday
 - Urgency: Medium
 
 EXAMPLE 2:
-Notes: "Cold outreach to Tom Park, Dir of Analytics at RetailMax. Left voicemail.
-No response yet. They were seen at a Snowflake event last month."
+Notes: "Cold outreach to Tom Park, Dir of IT Service Delivery at RetailMax. Left voicemail.
+No response yet. They were seen at a Jira Service Management user group last month."
 Extracted:
-- Contact: Tom Park (Dir of Analytics)
+- Contact: Tom Park (Dir of IT Service Delivery)
 - Company: RetailMax
-- Current Stack: Likely Snowflake
+- Current Stack: Likely Jira Service Management
 - Pain Points: Unknown
 - Budget: Unknown
 - Next Step: Follow up on voicemail
@@ -343,16 +344,16 @@ print(response.choices[0].message.content)
 # DBTITLE 1,Chain-of-Thought Deal Analysis
 # Chain-of-thought: Analyze a deal and recommend next steps
 deal_info = """
-Deal: Enterprise Data Platform — TechGlobal Inc.
+Deal: Enterprise ITSM Transformation — TechGlobal Inc.
 Stage: Negotiation
-Amount: $1.2M ARR
+Amount: $1.8M ACV
 Probability: 60%
 Days in Stage: 45
-Champion: VP of Data Engineering (strong advocate)
-Economic Buyer: CIO (met once, seemed cautious about migration risk)
-Competition: Snowflake (incumbent, 3-year contract ending in 6 months)
-Last Activity: Technical POC completed successfully 2 weeks ago
-Stalled Reason: Legal review of data residency requirements
+Champion: VP of IT Operations (strong advocate, frustrated with Remedy upgrade cycles)
+Economic Buyer: CIO (met once, cautious about platform migration risk)
+Competition: BMC Helix (incumbent, 3-year contract ending in 6 months)
+Last Activity: Technical POC completed successfully 2 weeks ago — demonstrated 40% faster incident resolution
+Stalled Reason: Legal review of data residency requirements for cloud deployment
 """
 
 response = client.chat.completions.create(
@@ -396,14 +397,14 @@ response = client.chat.completions.create(
     messages=[
         {
             "role": "system",
-            "content": """You are a senior GTM (Go-To-Market) Strategy Analyst at a leading enterprise
-software company. You specialize in data-driven sales strategy.
+            "content": """You are a senior GTM (Go-To-Market) Strategy Analyst at ServiceNow.
+You specialize in data-driven sales strategy for IT service management and digital workflow solutions.
 
 Your communication style:
 - Concise and executive-ready (use bullet points)
 - Always cite data or metrics when available
-- Frame recommendations in terms of revenue impact
-- Use MEDDPICC sales methodology terminology when relevant
+- Frame recommendations in terms of MTTR reduction, CSAT improvement, and TCO savings
+- Use ITSM industry terminology (ITIL, SLA, CMDB, incident, problem, change) when relevant
 - If you don't have data to support a claim, say so explicitly
 
 You never make things up. If asked about data you don't have, you recommend what data
@@ -411,7 +412,7 @@ to collect and why it matters."""
         },
         {
             "role": "user",
-            "content": "Our win rate dropped from 35% to 28% last quarter. We think it's competitive pressure from Snowflake. What should we investigate?"
+            "content": "Our win rate against BMC Remedy dropped from 65% to 52% last quarter. We think it's because BMC launched their Helix AI features. What should we investigate?"
         }
     ],
     max_tokens=500,
@@ -911,16 +912,16 @@ def search_knowledge_base(query: str, num_results: int = 3, category: str = None
 
 # DBTITLE 1,Test Tool 2: Competitive Positioning
 # Test Tool 2 — semantic search
-print("TEST: Searching for 'competitive positioning against Snowflake'")
+print("TEST: Searching for 'competitive positioning against BMC Remedy'")
 print("=" * 60)
-print(search_knowledge_base("competitive positioning against Snowflake"))
+print(search_knowledge_base("competitive positioning against BMC Remedy"))
 
 # COMMAND ----------
 
 # DBTITLE 1,Test Tool 2: Pricing and Packaging
-print("\nTEST: Searching for 'pricing and packaging'")
+print("\nTEST: Searching for 'ITSM pricing and packaging tiers'")
 print("=" * 60)
-print(search_knowledge_base("pricing and packaging"))
+print(search_knowledge_base("ITSM pricing and packaging tiers"))
 
 # COMMAND ----------
 
@@ -1054,7 +1055,7 @@ print(analyze_pipeline(stage="Negotiation", include_details=True))
 
 # DBTITLE 1,RAG Flow: Retrieve Context and Generate Answer
 # A simple RAG flow: retrieve context, then generate an answer
-user_question = "What's the best approach for selling to financial services companies?"
+user_question = "What's the best approach for selling ITSM solutions to financial services companies?"
 
 # Step 1: Retrieve relevant documents
 context = search_knowledge_base(user_question, num_results=3)
