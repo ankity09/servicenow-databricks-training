@@ -1106,8 +1106,7 @@ CREATE OR REPLACE FUNCTION {catalog}.{schema}.query_accounts(
   industry STRING DEFAULT NULL COMMENT 'Filter by industry (e.g. Technology, Financial Services, Healthcare)',
   min_revenue DOUBLE DEFAULT NULL COMMENT 'Minimum annual revenue in dollars',
   account_tier STRING DEFAULT NULL COMMENT 'Filter by tier: Enterprise, Mid-Market, or SMB',
-  region STRING DEFAULT NULL COMMENT 'Filter by region: North America, EMEA, APAC, LATAM',
-  max_results INT DEFAULT 10 COMMENT 'Maximum number of results to return'
+  region STRING DEFAULT NULL COMMENT 'Filter by region: North America, EMEA, APAC, LATAM'
 )
 RETURNS TABLE(
   account_id STRING,
@@ -1119,7 +1118,7 @@ RETURNS TABLE(
   country STRING,
   account_tier STRING
 )
-COMMENT 'Query GTM accounts from the data warehouse. Use when the user asks about specific accounts, companies, industries, or revenue data. Returns structured account information including company name, industry, revenue, and tier.'
+COMMENT 'Query GTM accounts from the data warehouse. Use when the user asks about specific accounts, companies, industries, or revenue data. Returns the top 10 matching accounts by revenue.'
 RETURN
   SELECT account_id, company_name, industry, employee_count,
          annual_revenue, region, country, account_tier
@@ -1129,7 +1128,7 @@ RETURN
     AND (account_tier IS NULL OR account_tier = query_accounts.account_tier)
     AND (region IS NULL OR region = query_accounts.region)
   ORDER BY annual_revenue DESC
-  LIMIT max_results
+  LIMIT 10
 """)
 print(f"Function {catalog}.{schema}.query_accounts created.")
 
@@ -1167,7 +1166,7 @@ print(f"Function {catalog}.{schema}.analyze_pipeline created.")
 
 # DBTITLE 1,Test UC Functions
 # Test query_accounts: Enterprise Technology accounts
-display(spark.sql(f"SELECT * FROM {catalog}.{schema}.query_accounts('Technology', NULL, 'Enterprise', NULL, 5)"))
+display(spark.sql(f"SELECT * FROM {catalog}.{schema}.query_accounts('Technology', NULL, 'Enterprise', NULL)"))
 
 # COMMAND ----------
 
