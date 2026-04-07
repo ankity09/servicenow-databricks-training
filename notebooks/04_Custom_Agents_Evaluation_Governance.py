@@ -821,7 +821,7 @@ Guidelines:
             return f"Unknown tool: {tool_name}"
         try:
             tool = self._tools_dict[tool_name]
-            result = tool.execute(tool_args)
+            result = tool.execute(**tool_args)
             return str(result) if result else "Tool returned no results."
         except Exception as e:
             return f"Tool execution error: {str(e)}"
@@ -829,7 +829,7 @@ Guidelines:
     @mlflow.trace(span_type=SpanType.LLM)
     def call_llm(self, messages: list) -> dict:
         """Call the LLM with tool schemas."""
-        tool_specs = [t.to_openai_tool() for t in self._tools_dict.values()]
+        tool_specs = [t.spec for t in self._tools_dict.values()]
 
         response = self._client.chat.completions.create(
             model=self._llm_endpoint,
@@ -991,14 +991,14 @@ Use tools to gather data before answering. Be concise, cite your sources, and fo
         if tool_name not in self._tools_dict:
             return f"Unknown tool: {{tool_name}}"
         try:
-            result = self._tools_dict[tool_name].execute(tool_args)
+            result = self._tools_dict[tool_name].execute(**tool_args)
             return str(result) if result else "Tool returned no results."
         except Exception as e:
             return f"Tool execution error: {{str(e)}}"
 
     @mlflow.trace(span_type=SpanType.LLM)
     def call_llm(self, messages):
-        tool_specs = [t.to_openai_tool() for t in self._tools_dict.values()]
+        tool_specs = [t.spec for t in self._tools_dict.values()]
         return self._client.chat.completions.create(
             model=self.LLM_ENDPOINT, messages=messages,
             tools=tool_specs if tool_specs else None,
