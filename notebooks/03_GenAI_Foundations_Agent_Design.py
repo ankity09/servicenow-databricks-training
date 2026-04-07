@@ -1125,14 +1125,14 @@ RETURNS TABLE(
 )
 COMMENT 'Query GTM accounts from the data warehouse. Use when the user asks about specific accounts, companies, industries, or revenue data. Returns the top 10 matching accounts by revenue.'
 RETURN
-  SELECT account_id, company_name, industry, employee_count,
-         annual_revenue, region, country, account_tier
-  FROM {catalog}.{schema}.gtm_accounts
-  WHERE (industry IS NULL OR industry = query_accounts.industry)
-    AND (min_revenue IS NULL OR annual_revenue >= min_revenue)
-    AND (account_tier IS NULL OR account_tier = query_accounts.account_tier)
-    AND (region IS NULL OR region = query_accounts.region)
-  ORDER BY annual_revenue DESC
+  SELECT t.account_id, t.company_name, t.industry, t.employee_count,
+         t.annual_revenue, t.region, t.country, t.account_tier
+  FROM {catalog}.{schema}.gtm_accounts t
+  WHERE (query_accounts.industry IS NULL OR t.industry = query_accounts.industry)
+    AND (query_accounts.min_revenue IS NULL OR t.annual_revenue >= query_accounts.min_revenue)
+    AND (query_accounts.account_tier IS NULL OR t.account_tier = query_accounts.account_tier)
+    AND (query_accounts.region IS NULL OR t.region = query_accounts.region)
+  ORDER BY t.annual_revenue DESC
   LIMIT 10
 """)
 print(f"Function {catalog}.{schema}.query_accounts created.")
@@ -1154,15 +1154,15 @@ RETURNS TABLE(
 )
 COMMENT 'Analyze the sales pipeline with deal metrics and stage breakdowns. Use when the user asks about pipeline health, deal stages, revenue forecasts, or pipeline analytics.'
 RETURN
-  SELECT stage,
+  SELECT t.stage,
          CAST(COUNT(*) AS INT) as deal_count,
-         ROUND(SUM(amount), 0) as total_amount,
-         ROUND(AVG(amount), 0) as avg_deal_size,
-         ROUND(AVG(probability) * 100, 1) as avg_probability_pct,
-         ROUND(SUM(amount * probability), 0) as weighted_pipeline
-  FROM {catalog}.{schema}.gtm_opportunities
-  WHERE (stage IS NULL OR stage = analyze_pipeline.stage)
-  GROUP BY stage
+         ROUND(SUM(t.amount), 0) as total_amount,
+         ROUND(AVG(t.amount), 0) as avg_deal_size,
+         ROUND(AVG(t.probability) * 100, 1) as avg_probability_pct,
+         ROUND(SUM(t.amount * t.probability), 0) as weighted_pipeline
+  FROM {catalog}.{schema}.gtm_opportunities t
+  WHERE (analyze_pipeline.stage IS NULL OR t.stage = analyze_pipeline.stage)
+  GROUP BY t.stage
   ORDER BY avg_probability_pct DESC
 """)
 print(f"Function {catalog}.{schema}.analyze_pipeline created.")
