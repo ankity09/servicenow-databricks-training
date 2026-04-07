@@ -99,13 +99,13 @@ All notebooks use a unified **Go-To-Market** scenario with synthetic Salesforce-
 
 | Table | Description | Rows |
 |-------|-------------|------|
-| `gtm_accounts` | Company firmographic data | ~2,000 |
-| `gtm_contacts` | Leads and contacts | ~10,000 |
-| `gtm_opportunities` | Sales pipeline deals | ~5,000 |
-| `gtm_activities` | Engagement events (calls, emails, meetings) | ~50,000 |
-| `gtm_campaigns` | Marketing campaigns | ~100 |
-| `gtm_campaign_members` | Campaign engagement tracking | ~20,000 |
-| `gtm_lead_scores` | Lead scoring with conversion labels | ~10,000 |
+| `gtm_accounts` | Company firmographic data | ~20,000 |
+| `gtm_contacts` | Leads and contacts | ~100,000 |
+| `gtm_opportunities` | Sales pipeline deals | ~50,000 |
+| `gtm_activities` | Engagement events (calls, emails, meetings) | ~500,000 |
+| `gtm_campaigns` | Marketing campaigns | ~1,000 |
+| `gtm_campaign_members` | Campaign engagement tracking | ~200,000 |
+| `gtm_lead_scores` | Lead scoring with conversion labels | ~100,000 |
 | `gtm_knowledge_base` | Product docs, sales playbooks, competitive intel | ~50 |
 
 **Morning (ML):** Build a lead scoring model that predicts which contacts will convert, then deploy it to production with full MLOps governance.

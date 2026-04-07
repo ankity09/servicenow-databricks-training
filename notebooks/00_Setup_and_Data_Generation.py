@@ -19,18 +19,18 @@
 # MAGIC
 # MAGIC | Table | Description | Approx Rows |
 # MAGIC |-------|-------------|-------------|
-# MAGIC | `gtm_accounts` | Company accounts | 40,000 |
-# MAGIC | `gtm_contacts` | Individual contacts / leads | 200,000 |
-# MAGIC | `gtm_opportunities` | Sales opportunities | 100,000 |
-# MAGIC | `gtm_activities` | Emails, calls, meetings, demos | 1,000,000 |
-# MAGIC | `gtm_campaigns` | Marketing campaigns | 2,000 |
-# MAGIC | `gtm_campaign_members` | Campaign engagement records | 400,000 |
-# MAGIC | `gtm_lead_scores` | Composite lead scores + conversion label | 200,000 |
+# MAGIC | `gtm_accounts` | Company accounts | 20,000 |
+# MAGIC | `gtm_contacts` | Individual contacts / leads | 100,000 |
+# MAGIC | `gtm_opportunities` | Sales opportunities | 50,000 |
+# MAGIC | `gtm_activities` | Emails, calls, meetings, demos | 500,000 |
+# MAGIC | `gtm_campaigns` | Marketing campaigns | 1,000 |
+# MAGIC | `gtm_campaign_members` | Campaign engagement records | 200,000 |
+# MAGIC | `gtm_lead_scores` | Composite lead scores + conversion label | 100,000 |
 # MAGIC | `gtm_knowledge_base` | Product docs, playbooks, competitive intel | 50 |
 # MAGIC
 # MAGIC **Compute:** Serverless (serverless compute auto-provisions and auto-scales infrastructure -- no cluster configuration needed)
 # MAGIC
-# MAGIC **Estimated Runtime:** ~10 minutes
+# MAGIC **Estimated Runtime:** ~5 minutes
 
 # COMMAND ----------
 
@@ -221,7 +221,7 @@ PRODUCT_LINES = ["ITSM Pro", "CSM Enterprise", "ITOM Visibility", "HRSD", "Secur
 
 # DBTITLE 1,Accounts Table Description
 # MAGIC %md
-# MAGIC ## 0.5 — Generate Accounts (40,000 rows)
+# MAGIC ## 0.5 — Generate Accounts (20,000 rows)
 # MAGIC
 # MAGIC Accounts are the root entity in our data model -- every contact, opportunity, and activity traces back to one.
 # MAGIC Fields like `industry`, `employee_count`, and `account_tier` will become key ML features for predicting deal outcomes.
@@ -230,8 +230,8 @@ PRODUCT_LINES = ["ITSM Pro", "CSM Enterprise", "ITOM Visibility", "HRSD", "Secur
 
 # COMMAND ----------
 
-# DBTITLE 1,Generate 40,000 Account Records
-n_accounts = 40000
+# DBTITLE 1,Generate 20,000 Account Records
+n_accounts = 20000
 
 # Generate unique company names (prefixes x suffixes > 40000 needed)
 all_names = [f"{p} {s}" for p in PREFIXES for s in SUFFIXES]
@@ -274,15 +274,15 @@ print(f"gtm_accounts: {n_accounts} rows written")
 
 # DBTITLE 1,Contacts Table Description
 # MAGIC %md
-# MAGIC ## 0.6 — Generate Contacts (200,000 rows)
+# MAGIC ## 0.6 — Generate Contacts (100,000 rows)
 # MAGIC
 # MAGIC Each contact has a `lead_source` and `seniority_level` -- these become important ML features later.
 # MAGIC For example, a "Demo Request" from a "VP" converts at a much higher rate than an "Organic" visit from an "Individual Contributor."
 
 # COMMAND ----------
 
-# DBTITLE 1,Generate 200,000 Contact Records
-n_contacts = 200000
+# DBTITLE 1,Generate 100,000 Contact Records
+n_contacts = 100000
 account_ids = df_accounts["account_id"].values
 
 df_contacts = pd.DataFrame({
@@ -307,12 +307,12 @@ print(f"gtm_contacts: {n_contacts} rows written")
 
 # DBTITLE 1,Opportunities Section
 # MAGIC %md
-# MAGIC ## 0.7 — Generate Opportunities (100,000 rows)
+# MAGIC ## 0.7 — Generate Opportunities (50,000 rows)
 
 # COMMAND ----------
 
-# DBTITLE 1,Generate 100,000 Opportunity Records
-n_opps = 100000
+# DBTITLE 1,Generate 50,000 Opportunity Records
+n_opps = 50000
 contact_ids = df_contacts["contact_id"].values
 
 stages = np.random.choice(STAGES, size=n_opps, p=[0.20, 0.20, 0.15, 0.15, 0.18, 0.12])
@@ -341,12 +341,12 @@ print(f"gtm_opportunities: {n_opps} rows written")
 
 # DBTITLE 1,Activities Section
 # MAGIC %md
-# MAGIC ## 0.8 — Generate Activities (1,000,000 rows)
+# MAGIC ## 0.8 — Generate Activities (500,000 rows)
 
 # COMMAND ----------
 
-# DBTITLE 1,Generate 1,000,000 Activity Records
-n_activities = 1000000
+# DBTITLE 1,Generate 500,000 Activity Records
+n_activities = 500000
 opp_ids = df_opps["opportunity_id"].values
 
 act_types = np.random.choice(ACTIVITY_TYPES, size=n_activities, p=[0.30, 0.25, 0.15, 0.10, 0.10, 0.10])
@@ -380,12 +380,12 @@ print(f"gtm_activities: {n_activities} rows written")
 
 # DBTITLE 1,Campaigns Section
 # MAGIC %md
-# MAGIC ## 0.9 — Generate Campaigns (2,000 rows)
+# MAGIC ## 0.9 — Generate Campaigns (1,000 rows)
 
 # COMMAND ----------
 
-# DBTITLE 1,Generate 2,000 Campaign Records
-n_campaigns = 2000
+# DBTITLE 1,Generate 1,000 Campaign Records
+n_campaigns = 1000
 campaign_types = ["Email Nurture", "Webinar", "Event", "Content Syndication", "Paid Search", "Social"]
 channels = ["Email", "Web", "Social", "Events", "Search", "Partner"]
 
@@ -411,12 +411,12 @@ print(f"gtm_campaigns: {n_campaigns} rows written")
 
 # DBTITLE 1,Campaign Members Section
 # MAGIC %md
-# MAGIC ## 0.10 — Generate Campaign Members (400,000 rows)
+# MAGIC ## 0.10 — Generate Campaign Members (200,000 rows)
 
 # COMMAND ----------
 
-# DBTITLE 1,Generate 400,000 Campaign Member Records
-n_members = 400000
+# DBTITLE 1,Generate 200,000 Campaign Member Records
+n_members = 200000
 campaign_ids = df_campaigns["campaign_id"].values
 statuses = ["Sent", "Opened", "Clicked", "Responded", "Converted"]
 
@@ -446,14 +446,14 @@ print(f"gtm_campaign_members: {n_members} rows written")
 
 # DBTITLE 1,Lead Scores Table Description
 # MAGIC %md
-# MAGIC ## 0.11 — Generate Lead Scores (200,000 rows — one per contact)
+# MAGIC ## 0.11 — Generate Lead Scores (100,000 rows — one per contact)
 # MAGIC
 # MAGIC The `converted` column is the **target variable** for our ML lead scoring model.
 # MAGIC Approximately 30% of contacts convert, with conversion correlated to engagement and fit scores.
 
 # COMMAND ----------
 
-# DBTITLE 1,Generate 200,000 Lead Score Records
+# DBTITLE 1,Generate 100,000 Lead Score Records
 n_leads = n_contacts  # one score per contact
 
 engagement = np.random.uniform(0, 100, n_leads)
