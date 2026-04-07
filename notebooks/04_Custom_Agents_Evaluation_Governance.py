@@ -64,31 +64,45 @@ print(f"Catalog: {catalog} | Schema: {schema} | User: {username}")
 
 # COMMAND ----------
 
-# DBTITLE 1,Environment Fix — typing_extensions
+# DBTITLE 1,Environment Fix — Serverless Package Overrides
 # MAGIC %md
-# MAGIC #### Environment Fix -- typing_extensions
-# MAGIC On Databricks serverless compute, the pre-installed `typing_extensions` version can conflict with the OpenAI SDK.
-# MAGIC The cell below installs a compatible version. This is a known workaround -- not a bug in your code.
+# MAGIC #### Environment Fix -- Serverless Package Conflicts
+# MAGIC On Databricks serverless compute, system-level `typing_extensions` and `databricks-sdk` are too old
+# MAGIC for `openai` and `databricks-openai` respectively. The system path takes precedence, so we install
+# MAGIC newer versions to a temp directory and prepend it to `sys.path`.
 
 # COMMAND ----------
 
-# DBTITLE 1,Fix typing_extensions Conflict
-# Fix typing_extensions conflict on serverless compute:
-# The system typing_extensions is too old for openai/pydantic but takes precedence on sys.path.
+# DBTITLE 1,Override System Packages
 import subprocess, sys, importlib
 
-subprocess.check_call([sys.executable, "-m", "pip", "install", "typing_extensions>=4.12", "--upgrade", "--quiet"])
+# Install newer versions to a temp directory that we control
+subprocess.check_call([
+    sys.executable, "-m", "pip", "install",
+    "typing_extensions>=4.12", "databricks-sdk>=0.40.0",
+    "--target", "/tmp/pkg_overrides", "--upgrade", "--quiet"
+])
 
-# Clear cached modules
-mods_to_remove = [k for k in sys.modules if k == "typing_extensions" or k.startswith("typing_extensions.")]
-for mod in mods_to_remove:
-    del sys.modules[mod]
+# Prepend to sys.path so these are found before the system versions
+if "/tmp/pkg_overrides" not in sys.path:
+    sys.path.insert(0, "/tmp/pkg_overrides")
+
+# Flush all cached modules for these packages so Python reimports from the new path
+for prefix in ["typing_extensions", "databricks.sdk", "databricks"]:
+    for key in list(sys.modules.keys()):
+        if key == prefix or key.startswith(prefix + "."):
+            del sys.modules[key]
 importlib.invalidate_caches()
 
+# Verify typing_extensions
 import typing_extensions
-print(f"typing_extensions loaded from: {typing_extensions.__file__}")
-assert hasattr(typing_extensions, "deprecated"), "typing_extensions fix failed: 'deprecated' not available"
-print("typing_extensions fix verified successfully")
+assert hasattr(typing_extensions, "deprecated"), "typing_extensions fix failed"
+print(f"typing_extensions: {typing_extensions.__file__}")
+
+# Verify databricks-sdk
+from databricks.sdk.credentials_provider import CredentialsStrategy
+print(f"databricks-sdk: CredentialsStrategy available")
+print("Environment overrides verified successfully")
 
 # COMMAND ----------
 
