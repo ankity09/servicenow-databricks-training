@@ -709,7 +709,8 @@ print(f"DatabricksOpenAI client ready.")
 uc_mcp = McpServerToolkit(url=f"{host}/api/2.0/mcp/functions/{catalog}/{schema}")
 
 # Vector Search MCP server — provides semantic search tools
-vs_mcp = McpServerToolkit(url=f"{host}/api/2.0/mcp/vector-search/{vs_endpoint_name}/{vs_index_name}")
+# URL format: /api/2.0/mcp/vector-search/{catalog}/{schema}/{index_short_name}
+vs_mcp = McpServerToolkit(url=f"{host}/api/2.0/mcp/vector-search/{catalog}/{schema}/gtm_knowledge_vs_index")
 
 mcp_servers = [uc_mcp, vs_mcp]
 
@@ -996,7 +997,7 @@ Use tools to gather data before answering. Be concise, cite your sources, and fo
         self._tools_dict = {{}}
         mcp_servers = [
             McpServerToolkit(url=f"{{host}}/api/2.0/mcp/functions/{{self.CATALOG}}/{{self.SCHEMA}}"),
-            McpServerToolkit(url=f"{{host}}/api/2.0/mcp/vector-search/{{self.VS_ENDPOINT}}/{{self.VS_INDEX}}"),
+            McpServerToolkit(url=f"{{host}}/api/2.0/mcp/vector-search/{{self.CATALOG}}/{{self.SCHEMA}}/gtm_knowledge_vs_index"),
         ]
         for server in mcp_servers:
             try:
